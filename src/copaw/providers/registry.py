@@ -30,6 +30,11 @@ DASHSCOPE_MODELS: List[ModelInfo] = [
     ModelInfo(id="deepseek-v3.2", name="DeepSeek-V3.2"),
 ]
 
+DEEPSEEK_MODELS: List[ModelInfo] = [
+    ModelInfo(id="deepseek-chat", name="DeepSeek V3"),
+    ModelInfo(id="deepseek-reasoner", name="DeepSeek R1"),
+]
+
 ALIYUN_CODINGPLAN_MODELS: List[ModelInfo] = [
     ModelInfo(id="qwen3.5-plus", name="Qwen3.5 Plus"),
     ModelInfo(id="glm-5", name="GLM-5"),
@@ -65,6 +70,14 @@ PROVIDER_ALIYUN_CODINGPLAN = ProviderDefinition(
     models=ALIYUN_CODINGPLAN_MODELS,
 )
 
+PROVIDER_DEEPSEEK = ProviderDefinition(
+    id="deepseek",
+    name="DeepSeek",
+    default_base_url="https://api.deepseek.com/v1",
+    api_key_prefix="sk-",
+    models=DEEPSEEK_MODELS,
+)
+
 PROVIDER_LLAMACPP = ProviderDefinition(
     id="llamacpp",
     name="llama.cpp (Local)",
@@ -96,6 +109,7 @@ _BUILTIN_IDS: frozenset[str] = frozenset(
         "modelscope",
         "dashscope",
         "aliyun-codingplan",
+        "deepseek",
         "ollama",
         "llamacpp",
         "mlx",
@@ -106,6 +120,7 @@ PROVIDERS: dict[str, ProviderDefinition] = {
     PROVIDER_MODELSCOPE.id: PROVIDER_MODELSCOPE,
     PROVIDER_DASHSCOPE.id: PROVIDER_DASHSCOPE,
     PROVIDER_ALIYUN_CODINGPLAN.id: PROVIDER_ALIYUN_CODINGPLAN,
+    PROVIDER_DEEPSEEK.id: PROVIDER_DEEPSEEK,
     PROVIDER_OLLAMA.id: PROVIDER_OLLAMA,
     PROVIDER_LLAMACPP.id: PROVIDER_LLAMACPP,
     PROVIDER_MLX.id: PROVIDER_MLX,

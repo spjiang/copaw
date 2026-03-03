@@ -1563,6 +1563,9 @@ class FeishuChannel(BaseChannel):
                 self.verification_token,
             )
             .register_p2_im_message_receive_v1(self._on_message_sync)
+            .register_p2_im_chat_access_event_bot_p2p_chat_entered_v1(
+                lambda _data: None,
+            )
             .build()
         )
         self._ws_client = lark.ws.Client(
