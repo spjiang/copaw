@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # flake8: noqa: E501
 # pylint: disable=line-too-long
+import logging
 import os
 from pathlib import Path
 from typing import Optional
@@ -9,6 +10,8 @@ from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
 from ...constant import WORKING_DIR
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_file_path(file_path: str) -> str:
@@ -48,6 +51,11 @@ async def read_file(  # pylint: disable=too-many-return-statements
     """
 
     file_path = _resolve_file_path(file_path)
+
+    # 当 LLM 读取 SKILL.md 时，说明该 skill 被选中并开始执行
+    if Path(file_path).name == "SKILL.md":
+        skill_name = Path(file_path).parent.name
+        logger.info("🔧 [Skill 调用] Agent 正在使用 skill: %s", skill_name)
 
     if not os.path.exists(file_path):
         return ToolResponse(

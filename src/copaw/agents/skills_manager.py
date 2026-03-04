@@ -310,21 +310,33 @@ def sync_skills_from_active_to_customized(
 
 def list_available_skills() -> list[str]:
     """
-    List all available skills in active_skills directory.
+    List all available skills, merging active_skills and builtin skills dirs.
+
+    active_skills takes precedence (a skill disabled there won't appear even
+    if it exists in the builtin dir).  Any builtin skill not yet synced to
+    active_skills is included automatically, which lets developers add a new
+    SKILL.md under src/copaw/agents/skills/ and pick it up on the next
+    app restart without running ``copaw init``.
 
     Returns:
-        List of skill names.
+        List of skill names (de-duplicated, sorted).
     """
     active_skills = get_active_skills_dir()
+    builtin_skills = get_builtin_skills_dir()
 
-    if not active_skills.exists():
-        return []
+    names: dict[str, None] = {}
 
-    return [
-        d.name
-        for d in active_skills.iterdir()
-        if d.is_dir() and (d / "SKILL.md").exists()
-    ]
+    if active_skills.exists():
+        for d in active_skills.iterdir():
+            if d.is_dir() and (d / "SKILL.md").exists():
+                names[d.name] = None
+
+    if builtin_skills.exists():
+        for d in builtin_skills.iterdir():
+            if d.is_dir() and (d / "SKILL.md").exists():
+                names.setdefault(d.name, None)
+
+    return sorted(names.keys())
 
 
 def ensure_skills_initialized() -> None:

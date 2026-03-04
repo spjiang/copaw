@@ -20,6 +20,7 @@ from .model_factory import create_model_and_formatter
 from .prompt import build_system_prompt_from_working_dir
 from .skills_manager import (
     ensure_skills_initialized,
+    get_builtin_skills_dir,
     get_working_skills_dir,
     list_available_skills,
 )
@@ -30,6 +31,7 @@ from .tools import (
     edit_file,
     execute_shell_command,
     get_current_time,
+    get_weather,
     read_file,
     send_file_to_user,
     write_file,
@@ -98,6 +100,18 @@ class CoPawAgent(ReActAgent):
         # Build system prompt
         sys_prompt = self._build_sys_prompt()
 
+        # DEBUG: log skill prompt snippet to verify weather skill is registered
+        _skill_prompt = toolkit.get_agent_skill_prompt()
+        _weather_idx = _skill_prompt.find("## weather")
+        logger.info(
+            "DEBUG sys_prompt total=%d chars, skill_prompt=%d chars, weather_at=%d",
+            len(sys_prompt) + len(_skill_prompt),
+            len(_skill_prompt),
+            _weather_idx,
+        )
+        if _weather_idx >= 0:
+            logger.info("DEBUG weather desc: %s", _skill_prompt[_weather_idx:_weather_idx+200])
+
         # Create model and formatter using factory method
         model, formatter = create_model_and_formatter()
 
@@ -147,6 +161,7 @@ class CoPawAgent(ReActAgent):
         toolkit.register_tool_function(desktop_screenshot)
         toolkit.register_tool_function(send_file_to_user)
         toolkit.register_tool_function(get_current_time)
+        toolkit.register_tool_function(get_weather)
 
         return toolkit
 
@@ -160,10 +175,16 @@ class CoPawAgent(ReActAgent):
         ensure_skills_initialized()
 
         working_skills_dir = get_working_skills_dir()
+        builtin_skills_dir = get_builtin_skills_dir()
         available_skills = list_available_skills()
 
         for skill_name in available_skills:
+            # Prefer active_skills; fall back to builtin source dir so that
+            # new skills added under src/copaw/agents/skills/ are picked up
+            # on app restart without requiring `copaw init`.
             skill_dir = working_skills_dir / skill_name
+            if not skill_dir.exists():
+                skill_dir = builtin_skills_dir / skill_name
             if skill_dir.exists():
                 try:
                     toolkit.register_agent_skill(str(skill_dir))

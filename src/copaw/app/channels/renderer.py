@@ -102,8 +102,28 @@ class MessageRenderer:
                     continue
                 data = getattr(c, "data", None) or {}
                 name = data.get("name") or "tool"
+                args = data.get("arguments") or "{}"
+
+                # 当 LLM 读取某个 SKILL.md 时，显示友好的 skill 激活提示
+                if name == "read_file" and "SKILL.md" in args:
+                    try:
+                        import json as _json
+                        from pathlib import Path as _Path
+                        parsed = _json.loads(args)
+                        fp = parsed.get("file_path", "")
+                        skill_name = _Path(fp).parent.name if fp else ""
+                        if skill_name:
+                            indicator = (
+                                f"🔍 **[Skill]** `{skill_name}`"
+                                if s.supports_markdown
+                                else f"[Skill] {skill_name}"
+                            )
+                            out.append(TextContent(text=indicator))
+                            continue
+                    except Exception:
+                        pass
+
                 if s.show_tool_details:
-                    args = data.get("arguments") or "{}"
                     args_preview = (
                         args[:200] + "..." if len(args) > 200 else args
                     )
