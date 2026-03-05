@@ -2,15 +2,16 @@ import {
   AgentScopeRuntimeWebUI,
   IAgentScopeRuntimeWebUIOptions,
 } from "@agentscope-ai/chat";
-import { useMemo, useState } from "react";
-import { Modal, Button, Result } from "antd";
-import { ExclamationCircleOutlined, SettingOutlined } from "@ant-design/icons";
+import { useEffect, useMemo, useState } from "react";
+import { Modal, Button, Result, Tooltip } from "antd";
+import { ExclamationCircleOutlined, SettingOutlined, BugOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import sessionApi from "./sessionApi";
 import { useLocalStorageState } from "ahooks";
 import defaultConfig, { DefaultConfig } from "./OptionsPanel/defaultConfig";
 import Weather from "./Weather";
+import RedisDebugPanel from "./RedisDebugPanel";
 import { getApiUrl, getApiToken } from "../../api/config";
 import { providerApi } from "../../api/modules/provider";
 import "./index.module.less";
@@ -29,6 +30,20 @@ export default function ChatPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [showModelPrompt, setShowModelPrompt] = useState(false);
+  const [showDebugPanel, setShowDebugPanel] = useLocalStorageState<boolean>(
+    "redis-debug-panel-visible",
+    { defaultValue: false },
+  );
+  const [debugSessionId, setDebugSessionId] = useState<string>("");
+
+  // Keep debug panel session in sync even before sending message.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const sid = window.currentSessionId || "";
+      if (sid) setDebugSessionId((prev) => (prev === sid ? prev : sid));
+    }, 500);
+    return () => window.clearInterval(timer);
+  }, []);
   const [optionsConfig] = useLocalStorageState<OptionsConfig>(
     "agent-scope-runtime-webui-options",
     {
@@ -86,6 +101,8 @@ export default function ChatPage() {
 
       const session_id = window.currentSessionId || session?.session_id || "";
       const user_id = window.currentUserId || session?.user_id || "default";
+      // Sync session_id to debug panel
+      if (session_id) setDebugSessionId(session_id);
       const channel = window.currentChannel || session?.channel || "console";
 
       const requestBody = {
@@ -114,6 +131,14 @@ export default function ChatPage() {
       });
     };
 
+    // File upload endpoint (backend saves file and returns { url, name, size })
+    const baseURL = (optionsConfig?.api?.baseURL as string) || "";
+    const uploadUrl = baseURL
+      ? baseURL.replace("/agent/process", "").replace(/\/$/, "") + "/files/upload"
+      : getApiUrl("/files/upload");
+
+    const token = getApiToken();
+
     return {
       ...optionsConfig,
       session: {
@@ -122,6 +147,39 @@ export default function ChatPage() {
       },
       theme: {
         ...optionsConfig.theme,
+      },
+      sender: {
+        ...optionsConfig.sender,
+        // useAttachments only renders the upload button when customRequest is provided
+        attachments: {
+          accept: ".pdf,.docx,.doc,.xlsx,.xls,.csv,.txt,.md,.png,.jpg,.jpeg,.gif,.webp",
+          multiple: false,
+          maxCount: 3,
+          customRequest: async (options: any) => {
+            const { file, onSuccess, onError, onProgress } = options;
+            const formData = new FormData();
+            formData.append("file", file);
+            try {
+              onProgress?.({ percent: 30 });
+              const res = await fetch(uploadUrl, {
+                method: "POST",
+                headers: token ? { Authorization: `Bearer ${token}` } : {},
+                body: formData,
+              });
+              if (!res.ok) {
+                const err = await res.text();
+                onError?.(new Error(err));
+                return;
+              }
+              onProgress?.({ percent: 100 });
+              const data = await res.json();
+              // onSuccess receives the response as file.response in the file list
+              onSuccess?.(data, file);
+            } catch (e: any) {
+              onError?.(e);
+            }
+          },
+        },
       },
       api: {
         ...optionsConfig.api,
@@ -137,8 +195,43 @@ export default function ChatPage() {
   }, [optionsConfig]);
 
   return (
-    <div style={{ height: "100%", width: "100%" }}>
-      <AgentScopeRuntimeWebUI options={options} />
+    <div style={{ height: "100%", width: "100%", display: "flex", position: "relative" }}>
+      {/* Chat area */}
+      <div style={{ flex: 1, minWidth: 0, height: "100%" }}>
+        <AgentScopeRuntimeWebUI options={options} />
+      </div>
+
+      {/* Debug panel toggle button */}
+      <Tooltip title={showDebugPanel ? "隐藏 Redis 调试面板" : "显示 Redis 调试面板"} placement="left">
+        <Button
+          icon={<BugOutlined />}
+          size="small"
+          type={showDebugPanel ? "primary" : "default"}
+          onClick={() => setShowDebugPanel(!showDebugPanel)}
+          style={{
+            position: "absolute",
+            right: showDebugPanel ? 362 : 4,
+            top: 10,
+            zIndex: 100,
+            transition: "right 0.2s",
+          }}
+        />
+      </Tooltip>
+
+      {/* Redis debug panel */}
+      {showDebugPanel && (
+        <div
+          style={{
+            width: 360,
+            height: "100%",
+            flexShrink: 0,
+            borderLeft: "1px solid #e8e8e8",
+            background: "#f5f5f5",
+          }}
+        >
+          <RedisDebugPanel sessionId={debugSessionId} />
+        </div>
+      )}
 
       <Modal open={showModelPrompt} closable={false} footer={null} width={480}>
         <Result
@@ -163,3 +256,4 @@ export default function ChatPage() {
     </div>
   );
 }
+

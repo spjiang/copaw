@@ -22,6 +22,8 @@ from .desktop_screenshot import desktop_screenshot
 from .memory_search import create_memory_search_tool
 from .get_current_time import get_current_time
 from .get_weather import get_weather
+from .markdown_to_word import markdown_to_word
+from .save_contract_file import save_contract_file
 
 __all__ = [
     "execute_python_code",
@@ -40,4 +42,6 @@ __all__ = [
     "create_memory_search_tool",
     "get_current_time",
     "get_weather",
+    "markdown_to_word",
+    "save_contract_file",
 ]

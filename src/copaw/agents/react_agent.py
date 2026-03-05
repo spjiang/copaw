@@ -32,7 +32,9 @@ from .tools import (
     execute_shell_command,
     get_current_time,
     get_weather,
+    markdown_to_word,
     read_file,
+    save_contract_file,
     send_file_to_user,
     write_file,
 )
@@ -162,6 +164,8 @@ class CoPawAgent(ReActAgent):
         toolkit.register_tool_function(send_file_to_user)
         toolkit.register_tool_function(get_current_time)
         toolkit.register_tool_function(get_weather)
+        toolkit.register_tool_function(markdown_to_word)
+        toolkit.register_tool_function(save_contract_file)
 
         return toolkit
 

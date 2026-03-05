@@ -1,40 +1,169 @@
 # 项目背景
 
-现在开发团队计划开发一款合同审查平台，主要功能模块包含：合同起草（编写）、合同审查、合同对比，是一个工业级项目
+现在开发团队计划开发一款合同审查平台，主要功能模块包含：合同起草（编写）、合同审查、合同对比，这是是一个工业级项目，生成内容需要严谨可靠可实现。
 
-我现在主要合同审查，通过 skills技术进行完成，合同审查编写多个子 skill 实现，主 skill 通过用户聊天窗口下达合同审查对话。
+我现在需要完成合同审查流程编排，通过 skills技术进行完成，主智能体、子智能体都是通过 skill 技术完成，实现流程如下：
 
+1.主智能体（Skill）：主要完成子智能体（Skill）任务编排
+2.子智能体（Skill）：主要完成详细任务内容包含脚本等相关内容，数据输入、数据输出等
 
+# 平台框架使用说明
 
-# 合同审查智能体skill说明
+采用 Copaw 技术平台完成，必要时需修改前后端源代码完成当前需求建设。
 
-## 技术实现
+# 页面交互说明
 
-合同审查skill：合同审查智能体，合同审查分主智能体、子智能体。
+前端用户通过对话方式下发任务，如：帮我审查一份合同，等相关任务内容描述，后端通过Skill 进行完成，在调用每个子智能体（Skill）都必须通 websocket 技术发送（每个智能体数据的输入、数据的输出）给发送至前端（Web 端），订阅 ID 采用 当前对话 sessionID+登录用户 userID 进行拼接。
 
-主智能体 为 主 skill，子智能体也是 skill 实现。
+# 子智能体skill调用说明
 
-## 调用说明
+子智能体（Skill）对应的数据输入和数据的输出并必须进行数据库保存（调用 `save_agent_log`，可封装为 skill 或 tool）。
 
-主智能体为合同审查入口，并记录调用主合同审查时，并生成执行ID(exec_id)。
+保留当前执行 ID 相应的子智能体运行日志，保存在数据库中，字段如下：
 
-子智能体服务于主智能体，在主智能体编排子智能体。
+| 规范字段名 | 说明 |
+|---|---|
+| `runId` | 本次子智能体运行唯一 ID（每次调用时用 `uuid4()` 生成）|
+| `execId` | 主执行 ID（主智能体启动时生成，全程透传所有子智能体）|
+| `agentID` | 智能体唯一标识（如 `qichacha_query`、`contract_parse`）|
+| `inputContent` | 输入内容（JSON 字符串）|
+| `outputContent` | 输出内容（JSON 字符串，失败时为 null）|
+| `runtime` | 执行耗时（毫秒）|
 
-## 环境变量配置
+# 环境变量配置
 
 PlateCompanyName(平台企业名称)：软通智慧
 
-## 名称解释
-exec_id: 调用主智能体时，生成exec_id
-智能体：提到的智能体都是以 skill进行实现。
+# 名称解释
 
-## 合同审查日志记录技术实现
+| 名称 | 说明 |
+|---|---|
+| `exec_id` | 调用主智能体时生成，对应规范 `execId`，全程透传给所有子智能体 |
+| `run_id` | 每个子智能体每次执行时生成，对应规范 `runId`，用于定位单次执行记录 |
+| `subscribe_id` | WebSocket 订阅 ID = `sessionID + "_" + userID`，前端用此 ID 订阅推送消息 |
 
- - 根据用户对话发起合同审核需求时，调用合同审核主智能体（skill）时，生成记录调用合同审查主智能体，并记录执行ID(action id)
-并保留当前执行ID相应的的子智能体运行日志，并保存在数据库中，子智能体 属性包含 runId,actionID,agentID,inputContent,outputContent,runtime等相关字段
+---
+
+# 公共规范速查（字段映射清单）
+
+> 本规范适用于合同起草、合同审查、合同对比所有模块，所有 skill/scripts 开发必须遵守。
+
+## 一、数据库日志字段映射
+
+| 规范字段 | Python 参数名 | 数据类型 | 说明 |
+|---|---|---|---|
+| `runId` | `run_id` | UUID | 本次子智能体运行唯一 ID，`uuid4()` 生成 |
+| `execId` | `exec_id` | UUID | 主执行 ID，主智能体启动时生成，全程透传 |
+| `agentID` | `agent_id` | string | 智能体唯一标识，命名规则：`{功能}_{动作}` |
+| `inputContent` | `input_content` | TEXT(JSON) | 输入内容，JSON 字符串 |
+| `outputContent` | `output_content` | TEXT(JSON) | 输出内容，JSON 字符串；失败时传 `None` |
+| `runtime` | `runtime` | int(ms) | 执行耗时，毫秒 |
+| —— | `error_msg` | string | 错误信息，失败时填写，成功时省略 |
+
+## 二、save_agent_log 调用模板
+
+```python
+import sys, time, uuid, json
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+from shared.push import push
+from shared.db import save_agent_log
+
+session_id = sys.argv[1]
+user_id    = sys.argv[2]
+exec_id    = sys.argv[3]   # execId，全程透传
+
+run_id     = str(uuid.uuid4())   # runId，本次运行唯一 ID
+start_time = time.time()
+
+push(session_id, user_id, "🔍 正在执行：{智能体名称}...", msg_type="progress")
+
+try:
+    result = do_business_logic()
+    push(session_id, user_id, "✅ {智能体名称}完成", msg_type="result")
+    save_agent_log(
+        run_id=run_id,
+        exec_id=exec_id,
+        agent_id="your_agent_id",
+        input_content=json.dumps(input_data),
+        output_content=json.dumps(result),
+        runtime=int((time.time() - start_time) * 1000),
+    )
+    print(json.dumps(result))
+except Exception as e:
+    push(session_id, user_id, f"❌ {智能体名称}失败：{e}", msg_type="error")
+    save_agent_log(
+        run_id=run_id,
+        exec_id=exec_id,
+        agent_id="your_agent_id",
+        input_content=json.dumps(input_data),
+        output_content=None,
+        runtime=int((time.time() - start_time) * 1000),
+        error_msg=str(e),
+    )
+    sys.exit(1)
+```
+
+## 三、WebSocket 订阅 ID 规则
+
+```
+subscribe_id = f"{session_id}_{user_id}"
+```
+
+前端以 `subscribe_id` 订阅，接收当前用户当前会话所有子智能体的实时推送消息。
+
+## 四、脚本命令行参数规范
+
+所有 skill 的 scripts 脚本前三个参数固定为：
+
+```
+python scripts/xxx.py <session_id> <user_id> <exec_id> [业务参数...]
+```
+
+## 五、agentID 命名规范
+
+| 模块 | agentID | 说明 |
+|---|---|---|
+| 合同审查 | `contract_review_main` | 主审查智能体 |
+| 合同审查 | `contract_parse` | 合同内容解析 |
+| 合同审查 | `contract_extract` | 合同信息提取 |
+| 合同审查 | `qichacha_query` | 企查查查询 |
+| 合同审查 | `review_record_query` | 历史审查记录查询 |
+| 合同审查 | `review_point_query` | 审查点查询（企业/个人）|
+| 合同审查 | `product_price_query` | 产品价格查询 |
+| 合同审查 | `staff_info_query` | 交付人员查询 |
+| 合同审查 | `contract_relation_query` | 合同关联查询 |
+| 合同审查 | `law_retrieval` | 法案检索 |
+| 合同审查 | `contract_review_llm` | 审查 LLM 分析 |
+| 合同起草 | `contract_draft_main` | 主起草智能体 |
+| 合同起草 | `contract_template_match` | 模板匹配 |
+| 合同起草 | `contract_generate` | 合同生成 |
+| 合同对比 | `contract_compare_main` | 主对比智能体 |
+| 合同对比 | `contract_diff_analyze` | 差异分析 |
+
+## 六、数据库表结构
+
+```sql
+CREATE TABLE agent_logs (
+    id             BIGSERIAL PRIMARY KEY,
+    run_id         UUID NOT NULL,            -- runId：本次运行唯一 ID
+    exec_id        UUID NOT NULL,            -- execId：主执行 ID
+    agent_id       VARCHAR(100) NOT NULL,    -- agentID：智能体标识
+    input_content  TEXT,                    -- inputContent：输入内容（JSON）
+    output_content TEXT,                    -- outputContent：输出内容（JSON）
+    runtime        INTEGER,                 -- runtime：执行耗时（ms）
+    error_msg      TEXT,                    -- 错误信息（失败时填写）
+    extra          JSONB,                   -- 扩展字段
+    created_at     TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_agent_logs_exec_id ON agent_logs(exec_id);
+CREATE INDEX idx_agent_logs_run_id  ON agent_logs(run_id);
+CREATE INDEX idx_agent_logs_created ON agent_logs(created_at DESC);
+```
 
 
 ---------------------------------------------------------------------------
+
 
 # 公共智能体(skill、tool)
 
@@ -72,8 +201,8 @@ import time, uuid
 
 session_id = sys.argv[1]
 user_id    = sys.argv[2]
-exec_id    = sys.argv[3]
-action_id  = str(uuid.uuid4())
+exec_id    = sys.argv[3]   # 主执行 ID，全程透传
+run_id     = str(uuid.uuid4())  # 本次子智能体运行 ID（runId）
 start_time = time.time()
 
 # ① 执行前推送
@@ -87,12 +216,12 @@ try:
 
     # ③ 记录执行日志
     save_agent_log(
-        exec_id=exec_id, action_id=action_id,
-        agent_type="合同审查", agent_name="企查查查询",
-        status="success",
-        input=json.dumps({"company": company_name}),
-        output=json.dumps(result),
-        duration_ms=int((time.time() - start_time) * 1000),
+        run_id=run_id,
+        exec_id=exec_id,
+        agent_id="qichacha_query",          # agentID：唯一标识当前智能体
+        input_content=json.dumps({"company": company_name}),
+        output_content=json.dumps(result),
+        runtime=int((time.time() - start_time) * 1000),
     )
     print(json.dumps(result))
 
@@ -102,12 +231,13 @@ except Exception as e:
 
     # ⑤ 记录失败日志
     save_agent_log(
-        exec_id=exec_id, action_id=action_id,
-        agent_type="合同审查", agent_name="企查查查询",
-        status="failed",
-        input=json.dumps({"company": company_name}),
-        output="null", error_msg=str(e),
-        duration_ms=int((time.time() - start_time) * 1000),
+        run_id=run_id,
+        exec_id=exec_id,
+        agent_id="qichacha_query",
+        input_content=json.dumps({"company": company_name}),
+        output_content=None,
+        runtime=int((time.time() - start_time) * 1000),
+        error_msg=str(e),
     )
     print(json.dumps({"error": str(e)}))
     sys.exit(1)
@@ -219,6 +349,9 @@ COPAW_API = os.environ.get("COPAW_API_BASE", "http://127.0.0.1:8088")
 
 def push(session_id: str, user_id: str, text: str, msg_type: str = "progress") -> None:
     """向前端推送实时消息，scripts 脚本直接 import 调用，与 LLM 无关。
+
+    前端订阅 ID = sessionID + userID 拼接（如 "sess_abc123_user_456"），
+    前端通过此 ID 订阅轮询，接收当前用户当前会话的所有子智能体推送消息。
     
     Args:
         session_id: 当前会话 ID（由主智能体通过命令行参数传入）
@@ -226,10 +359,12 @@ def push(session_id: str, user_id: str, text: str, msg_type: str = "progress") -
         text:       推送内容（支持 Markdown）
         msg_type:   progress（进行中）/ result（完成）/ error（失败）
     """
+    subscribe_id = f"{session_id}_{user_id}"   # 订阅 ID = sessionID + userID 拼接
     try:
         requests.post(
             f"{COPAW_API}/api/internal/push",
             json={
+                "subscribe_id": subscribe_id,
                 "session_id": session_id,
                 "user_id": user_id,
                 "text": text,
@@ -245,22 +380,32 @@ def push(session_id: str, user_id: str, text: str, msg_type: str = "progress") -
 
 ```python
 # skills/qichacha/scripts/query.py
-import sys, os, json
+import sys, os, json, time, uuid
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
 from shared.push import push
 from shared.db import save_agent_log
 
 session_id = sys.argv[1]
 user_id    = sys.argv[2]
-exec_id    = sys.argv[3]
+exec_id    = sys.argv[3]   # execId：主执行 ID，全程透传
 company    = sys.argv[4]
+
+run_id     = str(uuid.uuid4())   # runId：本次运行唯一 ID
+start_time = time.time()
 
 push(session_id, user_id, f"🔍 正在查询企查查：{company}")
 
 result = call_qichacha_api(company)
 
 push(session_id, user_id, "✅ 企查查查询完成", msg_type="result")
-save_agent_log(exec_id=exec_id, agent_name="企查查查询", output=json.dumps(result), ...)
+save_agent_log(
+    run_id=run_id,
+    exec_id=exec_id,
+    agent_id="qichacha_query",
+    input_content=json.dumps({"company": company}),
+    output_content=json.dumps(result),
+    runtime=int((time.time() - start_time) * 1000),
+)
 print(json.dumps(result))
 ```
 
@@ -331,24 +476,25 @@ python scripts/qichacha/query.py {session_id} {user_id} {exec_id} {company_name}
 
 ## 执行记录工具（Python Tool）
 
-> 实现方式：Python 工具函数（`save_agent_log`），由代码层强制调用，不经过 LLM 判断。
+> 实现方式：Python 工具函数（`save_agent_log`），由 scripts 脚本层**强制调用**，不经过 LLM 判断。
+> 也可封装为 CoPaw Tool 供主智能体调用，两种方式均可。
 
-用于记录每个智能体（skill）的执行过程，持久化写入 PostgreSQL 数据库，支持全链路追踪。
+用于记录每个子智能体（skill）的执行过程，持久化写入数据库，支持按 `execId` 全链路追踪。
+
+字段对应新规范定义：`runId`（本次运行唯一ID）、`execId`（主执行ID）、`agentID`（智能体标识）、`inputContent`（输入）、`outputContent`（输出）、`runtime`（耗时）。
 
 ### 函数签名
 
 ```python
-async def save_agent_log(
-    exec_id: str,       # 主执行 ID，由主智能体生成，全程透传
-    action_id: str,     # 子动作 ID，每次子智能体调用时生成
-    agent_type: str,    # 业务类型：合同审查 / 合同起草 / 合同对比
-    agent_name: str,    # 智能体名称：如 企查查查询、合同解析、LLM审查
-    status: str,        # 执行状态：success / failed
-    input: str,         # 输入内容（JSON 字符串）
-    output: str,        # 输出内容（JSON 字符串）
-    error_msg: str = None,   # 错误信息（失败时填写，成功时为 null）
-    duration_ms: int = None, # 执行耗时（毫秒）
-    extra: dict = None,      # 扩展字段（业务特定附加信息）
+def save_agent_log(
+    run_id: str,              # runId：本次子智能体运行唯一 ID（uuid4 生成）
+    exec_id: str,             # execId：主执行 ID，由主智能体生成，全程透传
+    agent_id: str,            # agentID：智能体唯一标识，如 qichacha_query / contract_parse
+    input_content: str,       # inputContent：输入内容（JSON 字符串）
+    output_content: str,      # outputContent：输出内容（JSON 字符串，失败时为 null）
+    runtime: int,             # runtime：执行耗时（毫秒）
+    error_msg: str = None,    # 错误信息（失败时填写）
+    extra: dict = None,       # 扩展字段（业务特定附加信息）
 ) -> dict
 ```
 
@@ -356,18 +502,16 @@ async def save_agent_log(
 
 ```sql
 CREATE TABLE agent_logs (
-    id            BIGSERIAL PRIMARY KEY,
-    exec_id       UUID NOT NULL,           -- 主执行 ID
-    action_id     UUID NOT NULL,           -- 子动作 ID
-    agent_type    VARCHAR(50) NOT NULL,    -- 业务类型
-    agent_name    VARCHAR(100) NOT NULL,   -- 智能体名称
-    status        VARCHAR(20) NOT NULL,    -- success / failed
-    input         TEXT,                   -- 输入内容（JSON）
-    output        TEXT,                   -- 输出内容（JSON）
-    error_msg     TEXT,                   -- 错误信息
-    duration_ms   INTEGER,                -- 执行耗时
-    extra         JSONB,                  -- 扩展字段
-    created_at    TIMESTAMPTZ DEFAULT NOW()
+    id             BIGSERIAL PRIMARY KEY,
+    run_id         UUID NOT NULL,            -- runId：本次运行唯一 ID
+    exec_id        UUID NOT NULL,            -- execId：主执行 ID
+    agent_id       VARCHAR(100) NOT NULL,    -- agentID：智能体标识
+    input_content  TEXT,                    -- inputContent：输入内容（JSON）
+    output_content TEXT,                    -- outputContent：输出内容（JSON）
+    runtime        INTEGER,                 -- runtime：执行耗时（ms）
+    error_msg      TEXT,                    -- 错误信息（失败时填写）
+    extra          JSONB,                   -- 扩展字段
+    created_at     TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 索引：按主执行 ID 查全链路
@@ -1652,6 +1796,8 @@ def run(contract_text: str, session_id: str, user_id: str) -> dict:
 
 接收合同审查主智能体汇总的所有子智能体输出，以结构化提示词驱动大模型执行**单合同审查**与**多合同联合审查**，最终输出包含风险等级、原文引用、修改建议的风险点列表（JSON），供前端 Word 视图标注和联合审查面板展示。
 
+审查角度: 甲方、乙方、中立
+
 ### SKILL.md 提示词
 
 ````markdown
@@ -1773,12 +1919,17 @@ if __name__ == "__main__":
     exec_id     = sys.argv[3]
     payload_str = sys.argv[4]   # JSON 字符串，包含所有子智能体汇总数据
 
-    action_id  = str(uuid.uuid4())
+    run_id     = str(uuid.uuid4())   # runId：本次运行唯一 ID
     start_time = time.time()
 
     push(session_id, user_id, "🤖 AI 正在审查合同，请稍候...", msg_type="progress")
-    save_agent_log(exec_id=exec_id, action_id=action_id, agent="contract_review_llm",
-                   status="start", input={"payload_size": len(payload_str)})
+    save_agent_log(
+        run_id=run_id, exec_id=exec_id,
+        agent_id="contract_review_llm",
+        input_content=json.dumps({"payload_size": len(payload_str)}),
+        output_content=None,
+        runtime=0,
+    )
 
     try:
         payload = json.loads(payload_str)
@@ -1815,9 +1966,13 @@ if __name__ == "__main__":
         result = json.loads(resp.json()["choices"][0]["message"]["content"])
 
         risk_count = result.get("risk_count", {})
-        save_agent_log(exec_id=exec_id, action_id=action_id, agent="contract_review_llm",
-                       status="done", output=result,
-                       runtime=round(time.time() - start_time, 2))
+        save_agent_log(
+            run_id=run_id, exec_id=exec_id,
+            agent_id="contract_review_llm",
+            input_content=json.dumps({"payload_size": len(payload_str)}),
+            output_content=json.dumps(result),
+            runtime=int((time.time() - start_time) * 1000),
+        )
 
         push(session_id, user_id,
              f"📋 合同审查完成：发现 {risk_count.get('high',0)} 个高风险、"
@@ -1826,9 +1981,14 @@ if __name__ == "__main__":
         print(json.dumps(result, ensure_ascii=False))
 
     except Exception as e:
-        save_agent_log(exec_id=exec_id, action_id=action_id, agent="contract_review_llm",
-                       status="error", output={"error": str(e)},
-                       runtime=round(time.time() - start_time, 2))
+        save_agent_log(
+            run_id=run_id, exec_id=exec_id,
+            agent_id="contract_review_llm",
+            input_content=json.dumps({"payload_size": len(payload_str)}),
+            output_content=None,
+            runtime=int((time.time() - start_time) * 1000),
+            error_msg=str(e),
+        )
         push(session_id, user_id, f"❌ 合同审查失败：{e}", msg_type="error")
         raise
 ```

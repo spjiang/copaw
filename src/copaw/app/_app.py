@@ -215,6 +215,18 @@ app.include_router(
     tags=["agent"],
 )
 
+# Mount contract files directory for frontend access (Word preview/download)
+_contracts_dir = Path(os.environ.get(
+    "CONTRACT_STORAGE_DIR",
+    str(Path.home() / ".copaw" / "contracts"),
+))
+_contracts_dir.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/files/contracts",
+    StaticFiles(directory=str(_contracts_dir)),
+    name="contracts",
+)
+
 # Mount console: root static files (logo.png etc.) then assets, then SPA
 # fallback.
 if os.path.isdir(_CONSOLE_STATIC_DIR):

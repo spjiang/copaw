@@ -13,10 +13,14 @@ from .mcp import router as mcp_router
 from ..crons.api import router as cron_router
 from ..runner.api import router as runner_router
 from .console import router as console_router
+from .files import router as files_router
+from .redis_stream import router as redis_stream_router
 
 
 router = APIRouter()
 
+router.include_router(files_router)
+router.include_router(redis_stream_router)
 router.include_router(agent_router)
 router.include_router(config_router)
 router.include_router(console_router)

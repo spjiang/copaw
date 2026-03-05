@@ -9,7 +9,7 @@ const defaultConfig = {
     },
   },
   sender: {
-    attachments: false,
+    attachments: false,   // overridden at runtime in Chat/index.tsx
     maxLength: 10000,
     disclaimer: "Works for you, grows with you",
   },
