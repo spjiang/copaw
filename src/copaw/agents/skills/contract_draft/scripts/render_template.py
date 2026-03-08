@@ -25,6 +25,7 @@ sys.path.insert(0, str(_SKILLS_DIR))
 from event_meta import SKILL_LABEL, SKILL_NAME, get_event_name
 from push import push
 from redis_push import push_end, push_error, push_running, push_start
+from runtime_context import resolve_session_id, resolve_user_id
 
 RENDER_API = os.environ.get("TEMPLATE_RENDER_API", "http://10.17.55.121:8012/render")
 
@@ -96,7 +97,14 @@ def _load_params_text(params_file: Path) -> tuple[str, dict]:
 
 def main():
     if len(sys.argv) < 3:
-        print(json.dumps({"error": "usage: render_template.py <template_url> <params_json_file> [exec_id] [session_id] [user_id]"}))
+        print(
+            json.dumps(
+                {
+                    "error": "usage: render_template.py <template_url> <params_json_file> "
+                    "[exec_id] [session_id] [user_id] [render_mode]"
+                }
+            )
+        )
         sys.exit(1)
 
     if requests is None:
@@ -107,21 +115,32 @@ def main():
     template_url = sys.argv[1]
     params_file = Path(sys.argv[2])
     exec_id = sys.argv[3] if len(sys.argv) > 3 else ""
-    session_id = os.environ.get("COPAW_SESSION_ID") or (sys.argv[4] if len(sys.argv) > 4 else "") or "unknown_session"
-    user_id = os.environ.get("COPAW_USER_ID") or (sys.argv[5] if len(sys.argv) > 5 else "") or "unknown_user"
+    session_id = resolve_session_id(sys.argv[4] if len(sys.argv) > 4 else "")
+    user_id = resolve_user_id(sys.argv[5] if len(sys.argv) > 5 else "")
+    render_mode = (sys.argv[6] if len(sys.argv) > 6 else "").strip().lower() or "final"
     run_id = str(uuid.uuid4())
-    input_data = {"template_url": template_url, "params_file": str(params_file)}
+    is_preview = render_mode == "preview"
+    prepare_render_type = "template_render_preview_prepare" if is_preview else "template_render_prepare"
+    started_render_type = "template_render_preview_started" if is_preview else "template_render_started"
+    success_render_type = "template_render_preview_success" if is_preview else "template_render_success"
+    finished_render_type = "template_render_preview_finished" if is_preview else "template_render_finished"
+    failed_render_type = "template_render_preview_failed" if is_preview else "template_render_failed"
+    input_data = {
+        "template_url": template_url,
+        "params_file": str(params_file),
+        "render_mode": render_mode,
+    }
 
     push_start(
         session_id=session_id,
         user_id=user_id,
         skill_name=SKILL_NAME,
         skill_label=SKILL_LABEL,
-        event_name=get_event_name("template_render_prepare"),
+        event_name=get_event_name(prepare_render_type),
         input_data=input_data,
         exec_id=exec_id,
         run_id=run_id,
-        render_type="template_render_prepare",
+        render_type=prepare_render_type,
     )
 
     try:
@@ -136,8 +155,8 @@ def main():
             user_id=user_id,
             skill_name=SKILL_NAME,
             skill_label=SKILL_LABEL,
-            event_name=get_event_name("template_render_started"),
-            render_type="template_render_started",
+            event_name=get_event_name(started_render_type),
+            render_type=started_render_type,
             input_data=input_data,
             output_data={"template_url": template_url},
             exec_id=exec_id,
@@ -160,14 +179,17 @@ def main():
             "render_result_url": payload.get("url", ""),
             "message": payload.get("message", "ok"),
             "params_json": params_json,
+            "render_mode": render_mode,
+            "generation_mode": "template_render",
+            "result_type": "docx",
         }
         push_running(
             session_id=session_id,
             user_id=user_id,
             skill_name=SKILL_NAME,
             skill_label=SKILL_LABEL,
-            event_name=get_event_name("template_render_success"),
-            render_type="template_render_success",
+            event_name=get_event_name(success_render_type),
+            render_type=success_render_type,
             input_data=input_data,
             output_data=result,
             exec_id=exec_id,
@@ -179,15 +201,20 @@ def main():
             user_id=user_id,
             skill_name=SKILL_NAME,
             skill_label=SKILL_LABEL,
-            event_name=get_event_name("template_render_finished"),
+            event_name=get_event_name(finished_render_type),
             input_data=input_data,
             output_data=result,
-            render_type="template_render_finished",
+            render_type=finished_render_type,
             exec_id=exec_id,
             run_id=run_id,
             runtime_ms=runtime_ms,
         )
-        push(session_id, user_id, "✅ 模板渲染成功", msg_type="result")
+        push(
+            session_id,
+            user_id,
+            "✅ 模板预览渲染成功" if is_preview else "✅ 模板渲染成功",
+            msg_type="result",
+        )
         print(json.dumps({"success": True, **result}, ensure_ascii=False))
     except Exception as exc:
         runtime_ms = int((time.time() - start_time) * 1000)
@@ -196,8 +223,8 @@ def main():
             user_id=user_id,
             skill_name=SKILL_NAME,
             skill_label=SKILL_LABEL,
-            event_name=get_event_name("template_render_failed"),
-            render_type="template_render_failed",
+            event_name=get_event_name(failed_render_type),
+            render_type=failed_render_type,
             input_data=input_data,
             output_data={"error_message": str(exc)},
             exec_id=exec_id,
@@ -216,7 +243,12 @@ def main():
             run_id=run_id,
             runtime_ms=runtime_ms,
         )
-        push(session_id, user_id, f"❌ 模板渲染失败：{exc}", msg_type="error")
+        push(
+            session_id,
+            user_id,
+            f"❌ {'模板预览' if is_preview else '模板'}渲染失败：{exc}",
+            msg_type="error",
+        )
         print(json.dumps({"error": str(exc)}, ensure_ascii=False))
         sys.exit(1)
 

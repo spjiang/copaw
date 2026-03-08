@@ -8,6 +8,13 @@ import os
 import sys
 from datetime import datetime, timezone
 from typing import Any
+from pathlib import Path
+
+_CUR_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_CUR_DIR))
+
+from event_meta import get_event_category
+from runtime_context import resolve_user_id
 
 _redis_client = None
 _redis_available: bool | None = None
@@ -57,6 +64,7 @@ def redis_push(
     render_type: str,
     skill_label: str = "",
     event_name: str = "",
+    event_category: str = "",
     input_data: dict[str, Any] | None = None,
     output_data: dict[str, Any] | None = None,
     exec_id: str = "",
@@ -71,7 +79,7 @@ def redis_push(
 
     payload: dict[str, Any] = {
         "session_id": session_id,
-        "user_id": user_id or os.environ.get("COPAW_USER_ID", ""),
+        "user_id": resolve_user_id(user_id, default=""),
         "exec_id": exec_id,
         "run_id": run_id,
         "skill_name": skill_name,
@@ -79,6 +87,7 @@ def redis_push(
         "stage": stage,
         "render_type": render_type,
         "event_name": event_name or render_type or stage,
+        "event_category": event_category or get_event_category(render_type, stage),
         "input": input_data or {},
         "output": output_data or {},
         "timestamp": _utc_now(),
@@ -88,7 +97,7 @@ def redis_push(
     try:
         client.xadd(
             session_id,
-            {"data": json.dumps(payload, ensure_ascii=False)},
+            {"msg": json.dumps(payload, ensure_ascii=False)},
             maxlen=maxlen,
         )
         print(
@@ -109,6 +118,7 @@ def push_start(
     render_type: str = "agent_start",
     skill_label: str = "",
     event_name: str = "",
+    event_category: str = "",
 ) -> None:
     redis_push(
         session_id=session_id,
@@ -118,6 +128,7 @@ def push_start(
         render_type=render_type,
         skill_label=skill_label,
         event_name=event_name,
+        event_category=event_category,
         input_data=input_data,
         exec_id=exec_id,
         run_id=run_id,
@@ -130,6 +141,7 @@ def push_running(
     render_type: str,
     skill_label: str = "",
     event_name: str = "",
+    event_category: str = "",
     input_data: dict[str, Any] | None = None,
     output_data: dict[str, Any] | None = None,
     exec_id: str = "",
@@ -145,6 +157,7 @@ def push_running(
         render_type=render_type,
         skill_label=skill_label,
         event_name=event_name,
+        event_category=event_category,
         input_data=input_data,
         output_data=output_data,
         exec_id=exec_id,
@@ -165,6 +178,7 @@ def push_end(
     user_id: str = "",
     skill_label: str = "",
     event_name: str = "",
+    event_category: str = "",
 ) -> None:
     redis_push(
         session_id=session_id,
@@ -174,6 +188,7 @@ def push_end(
         render_type=render_type,
         skill_label=skill_label,
         event_name=event_name,
+        event_category=event_category,
         input_data=input_data,
         output_data=output_data,
         exec_id=exec_id,
@@ -194,6 +209,7 @@ def push_error(
     skill_label: str = "",
     event_name: str = "",
     render_type: str = "error",
+    event_category: str = "",
 ) -> None:
     redis_push(
         session_id=session_id,
@@ -203,6 +219,7 @@ def push_error(
         render_type=render_type,
         skill_label=skill_label,
         event_name=event_name,
+        event_category=event_category,
         input_data=input_data,
         output_data={"error": error_msg},
         exec_id=exec_id,

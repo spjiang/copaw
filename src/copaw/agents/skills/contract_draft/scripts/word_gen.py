@@ -15,6 +15,7 @@ sys.path.insert(0, str(_CUR_DIR))
 from event_meta import SKILL_LABEL, SKILL_NAME, get_event_name
 from push import push
 from redis_push import push_end, push_error, push_running, push_start
+from runtime_context import resolve_session_id, resolve_user_id
 
 
 def _build_docx(markdown_text: str, output_path: Path) -> None:
@@ -65,13 +66,21 @@ def _build_docx(markdown_text: str, output_path: Path) -> None:
 
 def main():
     if len(sys.argv) < 2:
-        print(json.dumps({"error": "usage: word_gen.py <markdown_file> [output_dir] [exec_id] [session_id]"}))
+        print(
+            json.dumps(
+                {
+                    "error": "usage: word_gen.py <markdown_file> [output_dir] [exec_id] "
+                    "[session_id] [user_id] [draft_entry_reason]"
+                }
+            )
+        )
         sys.exit(1)
 
     md_file = Path(sys.argv[1])
     exec_id = sys.argv[3] if len(sys.argv) > 3 else ""
-    session_id = os.environ.get("COPAW_SESSION_ID") or (sys.argv[4] if len(sys.argv) > 4 else "unknown_session")
-    user_id = os.environ.get("COPAW_USER_ID") or (sys.argv[5] if len(sys.argv) > 5 else "unknown_user")
+    session_id = resolve_session_id(sys.argv[4] if len(sys.argv) > 4 else "")
+    user_id = resolve_user_id(sys.argv[5] if len(sys.argv) > 5 else "")
+    draft_entry_reason = (sys.argv[6] if len(sys.argv) > 6 else "").strip() or "manual_or_unknown"
     import uuid as _uuid_mod
 
     run_id = str(_uuid_mod.uuid4())
@@ -132,6 +141,7 @@ def main():
         "exec_id": exec_id,
         "session_id": session_id,
         "title": title,
+        "draft_entry_reason": draft_entry_reason,
     }
     push(session_id, user_id, "📝 正在生成 Word 合同文件...", msg_type="progress")
     push_start(
@@ -191,6 +201,10 @@ def main():
         "file_url": file_url,
         "filename": filename,
         "file_size": file_size,
+        "render_mode": "final",
+        "generation_mode": "llm_draft",
+        "result_type": "docx",
+        "draft_entry_reason": draft_entry_reason,
     }
 
     push(session_id, user_id, f"✅ 合同文件已生成：{filename}", msg_type="result")

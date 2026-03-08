@@ -4,7 +4,12 @@ import {
 } from "@agentscope-ai/chat";
 import { useEffect, useMemo, useState } from "react";
 import { Modal, Button, Result, Tooltip } from "antd";
-import { ExclamationCircleOutlined, SettingOutlined, BugOutlined } from "@ant-design/icons";
+import {
+  ExclamationCircleOutlined,
+  SettingOutlined,
+  BugOutlined,
+  TableOutlined,
+} from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import sessionApi from "./sessionApi";
@@ -12,6 +17,7 @@ import { useLocalStorageState } from "ahooks";
 import defaultConfig, { DefaultConfig } from "./OptionsPanel/defaultConfig";
 import Weather from "./Weather";
 import RedisDebugPanel from "./RedisDebugPanel";
+import ContractParamsPanel from "./ContractParamsPanel";
 import { getApiUrl, getApiToken } from "../../api/config";
 import { providerApi } from "../../api/modules/provider";
 import "./index.module.less";
@@ -30,6 +36,10 @@ export default function ChatPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [showModelPrompt, setShowModelPrompt] = useState(false);
+  const [showContractParamsPanel, setShowContractParamsPanel] = useLocalStorageState<boolean>(
+    "contract-params-panel-visible",
+    { defaultValue: true },
+  );
   const [showDebugPanel, setShowDebugPanel] = useLocalStorageState<boolean>(
     "redis-debug-panel-visible",
     { defaultValue: false },
@@ -194,12 +204,34 @@ export default function ChatPage() {
     } as unknown as IAgentScopeRuntimeWebUIOptions;
   }, [optionsConfig]);
 
+  const sidePanelOffset =
+    (showContractParamsPanel ? 420 : 0) +
+    (showDebugPanel ? 360 : 0) +
+    4;
+
   return (
     <div style={{ height: "100%", width: "100%", display: "flex", position: "relative" }}>
       {/* Chat area */}
       <div style={{ flex: 1, minWidth: 0, height: "100%" }}>
         <AgentScopeRuntimeWebUI options={options} />
       </div>
+
+      {/* Contract params panel toggle button */}
+      <Tooltip title={showContractParamsPanel ? "隐藏合同参数总表" : "显示合同参数总表"} placement="left">
+        <Button
+          icon={<TableOutlined />}
+          size="small"
+          type={showContractParamsPanel ? "primary" : "default"}
+          onClick={() => setShowContractParamsPanel(!showContractParamsPanel)}
+          style={{
+            position: "absolute",
+            right: sidePanelOffset,
+            top: 10,
+            zIndex: 100,
+            transition: "right 0.2s",
+          }}
+        />
+      </Tooltip>
 
       {/* Debug panel toggle button */}
       <Tooltip title={showDebugPanel ? "隐藏 Redis 调试面板" : "显示 Redis 调试面板"} placement="left">
@@ -210,13 +242,28 @@ export default function ChatPage() {
           onClick={() => setShowDebugPanel(!showDebugPanel)}
           style={{
             position: "absolute",
-            right: showDebugPanel ? 362 : 4,
-            top: 10,
+            right: sidePanelOffset,
+            top: 44,
             zIndex: 100,
             transition: "right 0.2s",
           }}
         />
       </Tooltip>
+
+      {/* Contract params panel */}
+      {showContractParamsPanel && (
+        <div
+          style={{
+            width: 420,
+            height: "100%",
+            flexShrink: 0,
+            borderLeft: "1px solid #e8e8e8",
+            background: "#fafafa",
+          }}
+        >
+          <ContractParamsPanel sessionId={debugSessionId} />
+        </div>
+      )}
 
       {/* Redis debug panel */}
       {showDebugPanel && (

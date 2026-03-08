@@ -22,6 +22,7 @@ sys.path.insert(0, str(_SKILLS_DIR))
 from event_meta import SKILL_LABEL, SKILL_NAME, get_event_name
 from push import push
 from redis_push import push_end, push_error, push_running, push_start
+from runtime_context import resolve_input_file_urls, resolve_session_id, resolve_user_id
 from search_common import extract_keywords, infer_contract_type, search_templates
 
 SUPPORTED_EXTS = {".docx", ".doc", ".pdf", ".txt", ".md", ".wps"}
@@ -89,7 +90,7 @@ def _download_to_temp(url: str) -> str:
 
 
 def _pick_file_input(argv_file_input: str) -> str:
-    raw = (os.environ.get("COPAW_INPUT_FILE_URLS") or "").strip()
+    raw = resolve_input_file_urls(argv_file_input)
     if not raw:
         return argv_file_input
 
@@ -126,8 +127,8 @@ def main():
         print(json.dumps({"error": "usage: match_by_file.py session_id user_id exec_id file_path_or_url"}))
         sys.exit(1)
 
-    session_id = os.environ.get("COPAW_SESSION_ID") or sys.argv[1] or "unknown_session"
-    user_id = os.environ.get("COPAW_USER_ID") or sys.argv[2] or "unknown_user"
+    session_id = resolve_session_id(sys.argv[1] if len(sys.argv) > 1 else "")
+    user_id = resolve_user_id(sys.argv[2] if len(sys.argv) > 2 else "")
     exec_id = sys.argv[3]
     file_input = _pick_file_input(sys.argv[4])
     run_id = str(uuid.uuid4())

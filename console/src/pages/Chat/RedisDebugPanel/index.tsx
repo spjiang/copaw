@@ -20,24 +20,9 @@ import {
   ClockCircleOutlined,
 } from "@ant-design/icons";
 import { getApiUrl } from "../../../api/config";
+import { normalizeSkillEvent, SkillEvent } from "../skillEvent";
 
 const { Text, Paragraph } = Typography;
-
-interface SkillEvent {
-  id: string;
-  type: string;
-  session_id?: string;
-  exec_id?: string;
-  skill_name?: string;
-  skill_label?: string;
-  stage?: "start" | "running" | "end" | "error";
-  render_type?: string;
-  event_name?: string;
-  input?: Record<string, unknown>;
-  output?: Record<string, unknown>;
-  timestamp?: string;
-  runtime_ms?: number;
-}
 
 const STAGE_CONFIG = {
   start: { color: "processing", icon: <ClockCircleOutlined />, label: "开始" },
@@ -239,7 +224,7 @@ export default function RedisDebugPanel({ sessionId }: Props) {
 
     es.onmessage = (e) => {
       try {
-        const data: SkillEvent = JSON.parse(e.data);
+        const data = normalizeSkillEvent(JSON.parse(e.data) as SkillEvent);
         if (data.type === "connected") {
           setConnected(true);
           return;

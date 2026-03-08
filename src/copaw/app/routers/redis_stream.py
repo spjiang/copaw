@@ -20,6 +20,40 @@ from fastapi.responses import StreamingResponse
 router = APIRouter(prefix="/redis", tags=["redis"])
 
 
+def _decode_text(value):
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _normalize_fields(fields) -> dict:
+    normalized = {}
+    for key, value in (fields or {}).items():
+        normalized[str(_decode_text(key))] = _decode_text(value)
+    return normalized
+
+
+def _extract_stream_payload(fields) -> dict:
+    normalized = _normalize_fields(fields)
+    for field_name in ("msg", "data"):
+        raw = normalized.get(field_name)
+        if raw is None:
+            continue
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, str):
+            text = raw.strip()
+            if not text:
+                continue
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+    return normalized
+
+
 def _redis_config():
     return {
         "host": os.environ.get("REDIS_HOST", "127.0.0.1"),
@@ -92,10 +126,7 @@ async def _stream_events(session_id: str, last_id: str) -> AsyncGenerator[str, N
                 for _stream_key, messages in entries:
                     for msg_id, fields in messages:
                         last_id = msg_id
-                        try:
-                            data = json.loads(fields.get("data", "{}"))
-                        except Exception:
-                            data = fields
+                        data = _extract_stream_payload(fields)
                         payload = json.dumps(
                             {"type": "skill_event", "id": msg_id, **data},
                             ensure_ascii=False,

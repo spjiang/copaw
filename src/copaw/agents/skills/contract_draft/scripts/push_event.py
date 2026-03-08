@@ -11,9 +11,10 @@ from pathlib import Path
 _CUR_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_CUR_DIR))
 
-from event_meta import SKILL_LABEL, SKILL_NAME, get_event_name
+from event_meta import SKILL_LABEL, SKILL_NAME, get_event_category, get_event_name
 from push import push
 from redis_push import push_end, push_error, push_running, push_start
+from runtime_context import resolve_session_id, resolve_user_id
 
 
 def main():
@@ -41,16 +42,8 @@ def main():
     input_raw = sys.argv[6] if len(sys.argv) > 6 else "{}"
     output_raw = sys.argv[7] if len(sys.argv) > 7 else "{}"
 
-    session_id = (
-        os.environ.get("COPAW_SESSION_ID")
-        or (sys.argv[8] if len(sys.argv) > 8 else "")
-        or "unknown_session"
-    )
-    user_id = (
-        (sys.argv[9] if len(sys.argv) > 9 else "")
-        or os.environ.get("COPAW_USER_ID")
-        or "unknown_user"
-    )
+    session_id = resolve_session_id((sys.argv[8] if len(sys.argv) > 8 else ""))
+    user_id = resolve_user_id((sys.argv[9] if len(sys.argv) > 9 else ""))
     run_id = (sys.argv[10] if len(sys.argv) > 10 else "") or str(uuid.uuid4())
     runtime_ms = int(sys.argv[11]) if len(sys.argv) > 11 and str(sys.argv[11]).strip() else 0
     skill_label = (
@@ -63,6 +56,7 @@ def main():
         stage=stage,
         fallback=message,
     )
+    event_category = get_event_category(render_type=render_type, stage=stage)
 
     def _loads(raw: str):
         try:
@@ -95,6 +89,7 @@ def main():
             skill_name=skill_name,
             skill_label=skill_label,
             event_name=event_name,
+            event_category=event_category,
             input_data=input_data,
             exec_id=exec_id,
             run_id=run_id,
@@ -107,6 +102,7 @@ def main():
             skill_name=skill_name,
             skill_label=skill_label,
             event_name=event_name,
+            event_category=event_category,
             render_type=render_type,
             input_data=input_data,
             output_data=output_data,
@@ -121,6 +117,7 @@ def main():
             skill_name=skill_name,
             skill_label=skill_label,
             event_name=event_name,
+            event_category=event_category,
             input_data=input_data,
             output_data=output_data,
             render_type=render_type,
@@ -135,6 +132,7 @@ def main():
             skill_name=skill_name,
             skill_label=skill_label,
             event_name=event_name,
+            event_category=event_category,
             input_data=input_data,
             error_msg=output_data.get("error") or message or "unknown error",
             exec_id=exec_id,
@@ -152,6 +150,7 @@ def main():
                 "stage": stage,
                 "render_type": render_type,
                 "event_name": event_name,
+                "event_category": event_category,
                 "run_id": run_id,
             },
             ensure_ascii=False,
