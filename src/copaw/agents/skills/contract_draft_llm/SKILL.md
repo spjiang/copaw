@@ -1,6 +1,6 @@
 ---
 name: contract_draft_llm
-description: "合同起草流程最后阶段，当用户已填写好模板参数（或直接说开始起草）时，根据合同模板和参数生成完整合同正文（Markdown格式），然后生成Word文件。由合同起草主智能体在参数收集完成后调用。"
+description: "【LLM自由起草子智能体】仅供 contract_draft 主流程内部调用：当用户跳过模板、未匹配到模板、或模板渲染失败时，负责使用大模型生成完整合同并输出 Word 文件。"
 metadata:
   {
     "copaw": {
@@ -10,127 +10,162 @@ metadata:
   }
 ---
 
-# 合同起草 LLM 智能体
+# 合同自由起草智能体
 
-根据模板和参数，生成完整合同正文并输出 Word 文件。
+说明：本技能在业务上扮演 `contract_template_llm` 的角色，当前目录名保留为 `contract_draft_llm`，以兼容现有项目引用路径。
 
-> ⚠️ **执行规范（必须遵守）**
->
-> - **Step 2（写文件）和 Step 3（调用脚本）静默执行**，不向用户输出任何描述
-> - **只有 Step 1（合同正文）和 Step 4（完成提示）才输出给用户**
+## 适用场景
 
-> **注意**：本 skill 只使用 CoPaw 内置工具 `write_file` 和 `execute_shell_command`，
-> 无需任何自定义 Tool 注册，可直接移植到任意 CoPaw 项目。
+以下任一场景必须调用本技能：
 
-## 起草提示词
+1. 未上传附件且未匹配到平台模板
+2. 已上传附件但未匹配到平台模板
+3. 用户明确表示“跳过模板，直接起草”
+4. 模板渲染失败，需要回退
 
-接收以下变量，生成合同正文：
-- `template_text`：合同模板全文（无模板时为空）
-- `params_json`：用户填写的参数 JSON
-- `user_intent`：用户描述的合同需求（无模板时使用）
-- `exec_id`：当前执行 ID（透传）
+## 运行时变量
 
-**你是一名专业合同起草专家。请根据以下信息起草一份完整、严谨的合同：**
+- `session_id`
+- `user_id`
+- `exec_id`
+- `template_text`：可为空
+- `template_file_path`：可为空
+- `params_json`：可为空对象
+- `user_intent`
 
-### 合同模板
-{template_text}
+## 强约束
 
-### 用户填写的参数
-{params_json}
+1. 内部写文件、脚本调用、事件推送必须静默执行。
+2. 最终必须返回结构化结果，不允许只说“已完成”。
+3. 若具备本地 `.docx` 模板路径和参数文件，可优先尝试模板填充保留样式。
+4. 若模板填充不可用，则必须回退为 Markdown -> Word。
+
+## 起草原则
+
+你是一名专业合同起草专家。请根据模板、参数和用户需求，生成完整、严谨、可交付的合同正文。
 
 ### 起草要求
 
-1. 将参数值准确填入模板对应位置，不得遗漏任何参数
-2. 金额大写自动转换（如 1500000 → 人民币壹佰伍拾万元整）
-3. 保持合同的法律语言风格，不得随意改变条款实质内容
-4. 使用标准 Markdown 格式输出：
-   - 合同标题：`# 标题`
-   - 各条款：`## 第X条 条款名称`
-5. 合同末尾必须包含甲乙双方签署区块
-
-**只输出 Markdown 格式合同正文，不要添加任何说明文字。**
-
----
+1. 若存在 `template_text`，尽量保持模板条款结构与法律表达风格。
+2. 若存在 `params_json`，必须优先使用参数值，不得遗漏必填信息。
+3. 若无模板，则根据 `user_intent` 自主生成完整合同。
+4. 输出必须为 Markdown 正文，不要附加解释性文字。
+5. Markdown 至少包含：
+   - `# 合同标题`
+   - `##` 级条款标题
+   - 合同主体信息
+   - 标的/服务内容
+   - 金额与付款方式
+   - 履行期限
+   - 双方权利义务
+   - 违约责任
+   - 争议解决
+   - 签署页
 
 ## 执行步骤
 
-### Step 0：推送开始事件
+### Step 1：推送开始事件
 
 ```bash
-execute_shell_command("python3 ~/.copaw/active_skills/shared/push_event.py LLM模型分析智能体 start {exec_id} progress '✍️ 正在起草合同正文...' '{}' {session_id} {user_id}")
+execute_shell_command("python3 ~/.copaw/active_skills/shared/push_event.py contract_draft_llm start {exec_id} agent_start '✍️ 正在进行合同自由起草' '{\"user_intent\":\"{user_intent}\"}' '{\"message\":\"开始自由起草合同\"}' {session_id} {user_id}")
 ```
 
-### Step 1：生成合同 Markdown 正文
-
-按照上述起草提示词生成完整合同内容，存入变量 `contract_md`。
-
----
-
-### Step 2：将 Markdown 写入临时文件
-
-使用内置工具 `write_file` 将合同内容保存为临时文件：
-
-```
-write_file(
-    path="/tmp/copaw_draft_{exec_id}.md",
-    content="{contract_md}"
-)
-```
-
----
-
-### Step 3：调用 word_gen.py 生成 Word 文件
-
-使用内置工具 `execute_shell_command` 调用独立脚本转换：
+### Step 2：推送起草中事件
 
 ```bash
-execute_shell_command(
-  "python ~/.copaw/active_skills/shared/word_gen.py \
-   /tmp/copaw_draft_{exec_id}.md \
-   ~/.copaw/contracts/drafts \
-   {exec_id} \
-   {session_id} \
-   {user_id}"
-)
+execute_shell_command("python3 ~/.copaw/active_skills/shared/push_event.py contract_draft_llm running {exec_id} llm_draft_started '' '{\"contract_type\":\"{contract_type_or_empty}\",\"user_intent\":\"{user_intent}\"}' '{\"message\":\"正在生成合同正文\"}' {session_id} {user_id}")
 ```
 
-解析命令输出的 JSON，获取以下字段：
-- `file_path`：Word 文件的本地绝对路径
-- `file_url`：Word 文件的 HTTP 访问地址
-- `filename`：文件名
+### Step 3：生成合同 Markdown
 
-若输出包含 `"error"` 字段，说明生成失败，直接将 Markdown 内容返回给用户。
+根据当前输入生成完整合同 Markdown，保存到变量 `contract_md`。
 
----
+### Step 4：写入临时文件
 
-### Step 4：推送结束事件并输出结果
+```text
+/tmp/copaw_draft_{exec_id}.md
+/tmp/copaw_params_{exec_id}.json
+```
 
-先推送 end 事件：
+使用：
+
+```text
+write_file(path="/tmp/copaw_draft_{exec_id}.md", content="{contract_md}")
+write_file(path="/tmp/copaw_params_{exec_id}.json", content="{params_json}")
+```
+
+### Step 5：优先尝试模板填充
+
+若同时满足以下条件：
+
+- `template_file_path` 非空
+- `template_file_path` 以 `.docx` 结尾
+- `/tmp/copaw_params_{exec_id}.json` 已存在
+
+则先尝试：
 
 ```bash
-execute_shell_command("python3 ~/.copaw/active_skills/shared/push_event.py LLM模型分析智能体 end {exec_id} progress '✅ 合同正文已生成' '{}' {session_id} {user_id}")
+execute_shell_command("python3 ~/.copaw/active_skills/shared/template_fill.py '{template_file_path}' /tmp/copaw_params_{exec_id}.json ~/.copaw/contracts/drafts {exec_id} {session_id} {user_id}")
 ```
 
-将 `file_url` 和 `file_path` 告知用户，并用以下格式总结：
+若脚本返回结果中不含 `error`，直接以该结果作为最终输出。
 
-> ✅ 合同《{合同标题}》起草完成！
->
-> 📄 Word 文件已生成：`{filename}`
->
-> 访问地址：{file_url}
->
-> 如需修改，请告诉我需要调整的内容。
+### Step 6：回退为 Markdown 转 Word
 
----
+若 Step 5 未执行或失败，则调用：
 
-## 无模板直接起草
+```bash
+execute_shell_command("python3 ~/.copaw/active_skills/shared/word_gen.py /tmp/copaw_draft_{exec_id}.md ~/.copaw/contracts/drafts {exec_id} {session_id} {user_id}")
+```
 
-若 `template_text` 为空，根据 `user_intent` 自行起草完整合同，包含所有标准合同条款：
-- 合同双方信息
-- 合同标的和金额
-- 履行期限和方式
-- 双方权利义务
-- 违约责任
-- 争议解决
-- 其他条款
-- 签署区块
+解析其 stdout JSON，至少取得：
+
+- `file_path`
+- `file_url`
+- `filename`
+
+### Step 7：若 Word 生成仍失败
+
+如果模板填充和 Markdown 转 Word 都失败，则：
+
+1. 推送错误事件
+2. 将 `contract_md` 作为文本结果返回主智能体
+3. 让主智能体决定如何向用户展示
+
+### Step 8：推送结束事件
+
+若生成成功，推送：
+
+```bash
+execute_shell_command("python3 ~/.copaw/active_skills/shared/push_event.py contract_draft_llm end {exec_id} agent_end '✅ 合同自由起草完成' '{\"user_intent\":\"{user_intent}\"}' '{\"result_type\":\"docx\",\"result_url\":\"{file_url}\",\"filename\":\"{filename}\"}' {session_id} {user_id}")
+```
+
+## 返回结构要求
+
+### 成功
+
+```json
+{
+  "success": true,
+  "result_type": "docx",
+  "file_path": "/abs/path/to/file.docx",
+  "file_url": "http://xxx/file.docx",
+  "filename": "file.docx"
+}
+```
+
+### 回退为文本
+
+```json
+{
+  "success": false,
+  "result_type": "markdown",
+  "markdown": "# 合同标题\n..."
+}
+```
+
+## 失败处理
+
+- `template_fill.py` 失败：继续走 `word_gen.py`
+- `word_gen.py` 失败：返回 Markdown 文本
+- 起草内容为空：视为失败，不允许返回空文档

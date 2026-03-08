@@ -1,6 +1,6 @@
 ---
 name: contract_draft
-description: "合同起草主编排智能体。当用户请求起草合同时调用（如'帮我起草一份采购合同'、'我要写一份服务合同'、'起草合同'等）。负责协调所有子智能体完成完整的合同起草流程，包括模板选择、参数填写和最终生成Word文件。"
+description: "【主智能体/唯一入口】用户发起合同起草请求时必须优先调用本技能；本技能负责编排模板匹配、参数提取、模板渲染与 LLM 自由起草，最终输出合同文件。"
 metadata:
   {
     "copaw": {
@@ -12,212 +12,217 @@ metadata:
 
 # 合同起草主编排智能体
 
-协调子智能体完成完整合同起草流程，最终输出 Word 文件。
+本技能是合同起草的唯一入口，负责把用户输入编排成一条稳定的工业级合同生成链路。
 
-> ⚠️ **执行规范（必须遵守）**
->
-> - **所有内部步骤静默执行**，包括：读取参数、生成 exec_id、调用脚本、解析 JSON、提取文本等操作，**一律不向用户输出任何描述**
-> - **禁止向用户说明**你在做什么步骤、读取了什么变量、执行了什么命令
-> - **只有以下内容才输出给用户**：
->   1. 需要用户回答的问题（如选择模板序号、填写合同参数）
->   2. 最终完成结果（如 Word 文件地址）
->   3. 执行失败时的错误提示
+## 核心职责
 
-**运行时可用变量**（从系统上下文中直接读取，无需用户输入）：
-- `session_id`：从系统提示词中 `当前的session_id: <值>` 提取
-- `user_id`：从系统提示词中 `当前的user_id: <值>` 提取
-- `exec_id`：本次起草任务的唯一 ID，执行前用 `python3 -c "import uuid; print(uuid.uuid4())"` 生成
+1. 统一生成 `exec_id`
+2. 统一推送主流程 `start -> running -> end`
+3. 判断有无附件
+4. 判断用户合同意图是否明确
+5. 编排调用：
+   - `contract_template_match`
+   - `contract_template_params`
+   - `contract_draft_llm`
+6. 输出最终合同结果
 
-**合同类型定义**：
-- **采购合同**：软通智慧为甲方/委托方/采购方（公司出钱向外采购）
-- **销售合同**：软通智慧为乙方/受托方（公司向客户提供服务/产品）
+## 可用运行时变量
 
----
+- `session_id`：从系统上下文提取
+- `user_id`：来自 `COPAW_USER_ID` 或系统上下文
+- `file_list`：`os.environ.get("COPAW_INPUT_FILE_URLS")`
+- `user_input_text`：用户当前输入
 
-## Step 1：生成执行 ID
+## 严格约束
+
+1. 内部脚本执行、Redis 推送、JSON 解析必须静默执行。
+2. 只有以下三类内容可以直接发给用户：
+   - 需要用户确认模板
+   - 需要用户补充参数
+   - 最终结果或必要错误提示
+3. 未上传附件时，不能直接默认走 LLM；必须先尝试识别合同类型并查模板。
+4. 匹配到模板后，不能绕过用户确认。
+5. 参数未补齐时，不能调用模板渲染。
+
+## 执行主流程
+
+### Step 1：生成 `exec_id`
 
 ```bash
 execute_shell_command("python3 -c \"import uuid; print(uuid.uuid4())\"")
 ```
 
-将输出结果保存为 `exec_id`，全程透传。
+保存为 `exec_id`，后续所有脚本与事件必须透传。
 
-生成后立即推送 start 事件：
-
-```bash
-execute_shell_command("python3 ~/.copaw/active_skills/shared/push_event.py 合同起草主智能体 start {exec_id} progress '🚀 合同起草流程开始' '{}' {session_id} {user_id}")
-```
-
----
-
-## Step 2：判断用户输入方式
-
-查看消息内容，判断走哪条路径：
-
----
-
-### Case A：用户上传了附件
-
-**如何识别并提取文件地址**（按优先级依次检查消息内容）：
-
-#### 方式 1：本地路径（CoPaw 自动注入）
-
-CoPaw 处理附件时会将文件保存到本地，并在消息中追加：
-```
-用户上传文件，已经下载到 /Users/xxx/.copaw/file_store/uploads/20260305_abc_合同.docx
-```
-用正则 `用户上传文件，已经下载到\s+(\S+)` 提取路径，赋值给 `file_ref`。
-
-#### 方式 2：HTTP 下载地址
-
-若消息中没有本地路径注入，检查是否包含 HTTP 下载地址，例如：
-```
-http://127.0.0.1:8088/api/files/download/20260305_abc_合同.docx
-```
-或用户直接提供的文件 URL。将该 URL 赋值给 `file_ref`。
-
-> **两种格式 `match_by_file.py` 均支持**：
-> - 本地路径 → 直接读取文件
-> - HTTP URL → 脚本自动下载到临时目录后处理，完成后自动清理
-
-#### A-1：调用文件匹配脚本
-
-脚本内部完成：（下载文件 →）读取文件文本 → 识别合同类型 → TF-IDF 相似度匹配模板库：
+### Step 2：推送主流程开始事件
 
 ```bash
-execute_shell_command("python3 ~/.copaw/active_skills/contract_template_match/scripts/match_by_file.py {session_id} {user_id} {exec_id} '{file_ref}'")
+execute_shell_command("python3 ~/.copaw/active_skills/shared/push_event.py contract_draft start {exec_id} agent_start '🚀 合同起草流程开始' '{\"user_input_text\":\"{user_input_text}\",\"file_list\":\"{file_list}\"}' '{\"message\":\"合同起草主流程开始\"}' {session_id} {user_id}")
 ```
 
-> **匹配逻辑**：
-> 1. 若上传文件路径与模板库中某文件完全一致 → **精准命中**（`matched_file: true`）
-> 2. 否则提取文件全文 → 识别合同类型 → TF-IDF 相似度排序 → 返回 top-5
+### Step 3：检查附件
 
-#### A-2：根据匹配结果处理
+先读取：
 
-解析脚本输出的 JSON：
-
-**精准命中（`matched_file: true`）**：
-- 告知用户："识别到您上传的正是模板库中的 **{template_name}**，将直接以此为模板起草"
-- 获取模板全文（含占位符）：
-  ```bash
-  execute_shell_command("curl -s http://localhost:9000/api/template/{template_id}/content")
-  ```
-- 解析 JSON，取 `content` 字段，设置 `draft_template_text = content`
-
-**相似匹配（`matched_file: false`，`total > 0`）**：
-- 展示模板列表（Markdown 表格：序号、模板名称、合同类型、相似度）
-- 提问："以上是相似模板，请选择序号；或输入 **0** 直接用您上传的文件作为起草依据"
-- 用户选序号 N → 获取第 N 个模板内容，设置 `draft_template_text`
-- 用户选 0 → 读取上传文件全文作为模板：
-  ```bash
-  execute_shell_command("python3 -c \"from docx import Document; d=Document('{local_path}'); print('\\n'.join(p.text for p in d.paragraphs if p.text.strip()))\"")
-  ```
-
-**无匹配（`total = 0`）**：
-- 告知"未找到相似模板，将直接基于您上传的文件起草"
-- 读取上传文件全文作为 `draft_template_text`
-
----
-
-### Case B：用户通过文字描述需求（无附件）
-
-1. 从用户描述提取关键词（如"运维服务采购"、"向客户提供技术开发"等）
-2. 调用模板检索脚本（不传 `contract_type`，由脚本自动识别）：
-   ```bash
-   execute_shell_command("python3 ~/.copaw/active_skills/contract_template_match/scripts/template_match.py {session_id} {user_id} {exec_id} '{query_text}'")
-   ```
-3. **有结果（`total > 0`）**：
-   - 展示模板表格，等待用户选择序号
-   - 用户选择后获取模板内容：
-     ```bash
-     execute_shell_command("curl -s http://localhost:9000/api/template/{template_id}/content")
-     ```
-   - 设置 `draft_template_text = content`
-4. **无结果（`total = 0`）**：
-   - 告知"未找到匹配模板，将根据您的需求直接起草"
-   - `draft_template_text = ""`
-
----
-
-## Step 3：提取模板参数
-
-若 `draft_template_text` 非空，调用 **contract_template_params** skill，传入：
-- `template_text`：模板全文（即 `draft_template_text`）
-- `exec_id`：当前执行 ID
-- `session_id`：当前会话 ID
-
-skill 会分析模板中的 `【   】`、`（   ）` 等占位符，**只以 Markdown 格式**展示参数表单给用户（不输出 raw JSON）：
-
-```
-请填写以下合同参数：
-
-**甲方信息**
-- 甲方企业名称：___（必填）
-- 统一社会信用代码：___（必填）
-
-**乙方信息**
-- 乙方企业名称：___（必填）
-
-**合同条款**
-- 合同金额（元）：___（必填）
-- 签署日期：___（必填，格式 YYYY-MM-DD）
-- 甲方授权代表：___（必填）
-- 乙方授权代表：___（必填）
+```python
+file_list = os.environ.get("COPAW_INPUT_FILE_URLS")
 ```
 
-等待用户填写，将回复记录到 `filled_params`，检查必填字段是否完整。
-用户发出"开始起草"/"直接起草"/"跳过"时，进入 Step 4。
-
-若 `draft_template_text` 为空，跳过此步直接进入 Step 4。
-
-> `contract_template_params` 内部会将参数 JSON 写入文件并调用 `push_params.py` 推送至 Redis，主智能体无需重复执行。
-
----
-
-## Step 4：起草合同正文
-
-调用 **contract_draft_llm** skill，传入：
-- `draft_template_text`：模板全文（为空则纯 LLM 起草）
-- `filled_params`：用户填写的参数
-- `user_intent`：用户原始描述（无模板时使用）
-- `exec_id`：执行 ID（透传）
-
----
-
-## Step 5：生成 Word 文件
-
-由 `contract_draft_llm` skill 内部完成（写入临时 Markdown 文件后调用 `word_gen.py` 转换）。
-从 skill 输出中获取：
-- `file_path`：Word 文件本地路径
-- `file_url`：Word 文件访问地址
-
----
-
-## Step 6：输出结果
-
-在输出最终文字结果前，推送 end 事件：
+然后推送：
 
 ```bash
-execute_shell_command("python3 ~/.copaw/active_skills/shared/push_event.py 合同起草主智能体 end {exec_id} contract_draft_task_end '✅ 合同起草流程完成' '{\"file_url\":\"{file_url}\",\"filename\":\"{filename}\"}' {session_id} {user_id}")
+execute_shell_command("python3 ~/.copaw/active_skills/shared/push_event.py contract_draft running {exec_id} file_list_checked '' '{\"file_list\":\"{file_list}\"}' '{\"has_attachment\":true,\"attachment_count\":1}' {session_id} {user_id}")
 ```
 
+#### 场景 A：存在附件
+
+调用 `contract_template_match`，并让它走附件匹配脚本：
+
+- 优先取最新一条附件作为 `file_ref`
+- 等待 `contract_template_match` 返回模板候选列表
+
+#### 场景 B：没有附件
+
+先判断用户意图是否足够明确：
+
+- 若用户已明确说“采购合同”“销售合同”“租赁合同”等，则调用 `contract_template_match`
+- 若用户只说“帮我起草一份合同”，则先追问合同类型
+
+推荐话术：
+
+`请问您要起草哪一类合同？例如采购合同、销售合同、租赁合同、服务合同等。`
+
+### Step 4：调用模板匹配子智能体
+
+#### 有附件
+
+将附件交给 `contract_template_match`：
+
+- 让其调用 `match_by_file.py`
+- 解析返回的 `templates`
+
+#### 无附件
+
+将用户意图交给 `contract_template_match`：
+
+- 让其调用 `template_match.py`
+- 解析返回的 `templates`
+
+### Step 5：处理模板匹配结果
+
+#### 场景 A：`need_user_intent = true`
+
+继续追问用户合同类型，不进入后续流程。
+
+#### 场景 B：`total > 0`
+
+向用户展示模板列表并要求确认：
+
+```markdown
+已为您匹配到以下合同模板，请选择要使用的模板：
+
+| 序号 | 模板名称 | 合同类型 | 分类 |
+| --- | --- | --- | --- |
+| 1 | 软件采购合同 | 采购 | 软件采购 |
+
+请输入序号选择模板；如需跳过模板并直接起草，请输入 `0`。
 ```
-✅ 合同《{合同标题}》起草完成！
 
-📄 Word 文件已生成：{filename}
-访问地址：{file_url}
+#### 场景 C：用户输入 `0` 或明确表示“跳过模板，直接起草”
 
-如需修改，请告诉我需要调整的内容。
+推送：
+
+```bash
+execute_shell_command("python3 ~/.copaw/active_skills/shared/push_event.py contract_draft running {exec_id} template_skipped '' '{\"user_input_text\":\"{user_input_text}\"}' '{\"message\":\"用户选择跳过模板\"}' {session_id} {user_id}")
 ```
 
----
+然后调用 `contract_draft_llm`。
 
-## 异常处理
+#### 场景 D：`total = 0`
 
-| 场景 | 处理方式 |
-|---|---|
-| 消息中无文件路径注入 | 告知"附件处理失败，请重新上传或描述合同需求" |
-| 模板 API 不可用（curl 失败） | 告知"模板服务暂时不可用，将根据您的描述直接起草" |
-| 脚本执行失败 | 输出错误信息，询问是否改用文字描述模式 |
-| Word 生成失败 | 将 Markdown 合同内容直接返回，提示可手动复制 |
-| 用户中途取消 | 礼貌确认并停止流程 |
+推送：
+
+```bash
+execute_shell_command("python3 ~/.copaw/active_skills/shared/push_event.py contract_draft running {exec_id} template_not_found '' '{\"user_input_text\":\"{user_input_text}\"}' '{\"message\":\"未匹配到平台模板\"}' {session_id} {user_id}")
+```
+
+然后直接调用 `contract_draft_llm`。
+
+### Step 6：模板确认后调用参数子智能体
+
+当用户选择了某个模板后，至少记录以下变量：
+
+- `selected_template_id`
+- `selected_template_url`
+- `selected_template_params_schema`
+- `selected_template_file_path`
+
+然后调用 `contract_template_params`。
+
+### Step 7：处理参数子智能体结果
+
+#### 参数未补齐
+
+继续等待用户填写参数，不结束主流程。
+
+#### 模板渲染成功
+
+直接输出渲染后的合同地址。
+
+#### 模板渲染失败
+
+回退到 `contract_draft_llm`。
+
+### Step 8：调用 LLM 自由起草子智能体
+
+以下场景必须调用 `contract_draft_llm`：
+
+- 用户未上传附件且未匹配到模板
+- 用户上传附件但未匹配到模板
+- 用户主动跳过模板
+- 模板渲染失败
+
+调用时应传入：
+
+- `template_text`：若有模板正文则传入，否则为空
+- `template_file_path`：若有本地模板路径则传入，否则为空
+- `params_json`：若已有参数文件则传入，否则为空对象
+- `user_intent`
+- `exec_id`
+- `session_id`
+- `user_id`
+
+### Step 9：结束主流程
+
+当最终获得 `file_url` 或 `render_result_url` 后，推送结束事件：
+
+```bash
+execute_shell_command("python3 ~/.copaw/active_skills/shared/push_event.py contract_draft end {exec_id} agent_end '✅ 合同起草流程完成' '{\"selected_template_id\":\"{selected_template_id}\",\"final_mode\":\"template_render_or_llm\"}' '{\"result_url\":\"{file_url}\",\"result_type\":\"docx\"}' {session_id} {user_id}")
+```
+
+然后再向用户输出：
+
+```text
+✅ 合同起草完成！
+
+📄 文件地址：{file_url}
+
+如需继续修改，请直接告诉我需要调整的条款或参数。
+```
+
+## 主流程决策矩阵
+
+- 未上传附件 + 意图不明确：先追问合同类型
+- 未上传附件 + 意图明确 + 匹配到模板：进入模板确认 -> 参数提取 -> 模板渲染
+- 未上传附件 + 意图明确 + 未匹配到模板：进入 `contract_draft_llm`
+- 已上传附件 + 匹配到模板：进入模板确认 -> 参数提取 -> 模板渲染
+- 已上传附件 + 未匹配到模板：进入 `contract_draft_llm`
+- 任意阶段用户主动跳过模板：进入 `contract_draft_llm`
+- 模板渲染失败：进入 `contract_draft_llm`
+
+## 失败处理
+
+- 附件解析失败：引导用户重新上传或改为文字描述
+- 模板匹配脚本失败：提示稍后重试，并允许走文字模式
+- 参数渲染失败：自动回退到 `contract_draft_llm`
+- LLM 起草失败：返回明确错误提示，不伪造成功结果

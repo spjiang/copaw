@@ -30,54 +30,13 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# 内联 Redis push（不依赖 shared 导入）
-# ---------------------------------------------------------------------------
+_SHARED_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_SHARED_DIR.parent))
+
+from shared.push import push
+from shared.redis_push import push_end, push_error, push_running, push_start
+
 _SKILL_NAME = "合同编写智能体"
-
-
-def _rp(session_id, skill_name, stage, render_type,
-        input_data=None, output_data=None,
-        exec_id="", run_id="", runtime_ms=0):
-    try:
-        from datetime import datetime, timezone
-        import redis as _r
-        _cli = _r.Redis(
-            host=os.environ.get("REDIS_HOST", "127.0.0.1"),
-            port=int(os.environ.get("REDIS_PORT", "6379")),
-            password=os.environ.get("REDIS_PASSWORD") or None,
-            db=int(os.environ.get("REDIS_DB", "0")),
-            socket_connect_timeout=2, socket_timeout=3, decode_responses=True,
-        )
-        _cli.ping()
-        _payload = {
-            "session_id": session_id, "exec_id": exec_id, "run_id": run_id,
-            "skill_name": skill_name, "stage": stage, "render_type": render_type,
-            "input": input_data or {}, "output": output_data or {},
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
-            "runtime_ms": runtime_ms,
-        }
-        _cli.xadd(session_id, {"data": json.dumps(_payload, ensure_ascii=False)}, maxlen=500)
-        print(f"[redis] → {session_id} skill={skill_name} stage={stage}", file=sys.stderr)
-    except Exception as _e:
-        print(f"[redis] skip: {_e}", file=sys.stderr)
-
-
-def _push_notify(session_id, user_id, msg, msg_type="progress"):
-    try:
-        import urllib.request as _ur
-        _body = json.dumps({
-            "session_id": session_id, "user_id": user_id,
-            "text": msg, "msg_type": msg_type,
-            "subscribe_id": f"{session_id}_{user_id}",
-        }).encode()
-        _req = _ur.Request(
-            "http://127.0.0.1:8088/api/console/internal-push",
-            data=_body, headers={"Content-Type": "application/json"}, method="POST",
-        )
-        _ur.urlopen(_req, timeout=3)
-    except Exception:
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -156,18 +115,30 @@ def main():
 
     if not md_file.exists():
         err = {"error": f"markdown file not found: {md_file}"}
-        _rp(session_id, _SKILL_NAME, "error", "error",
+        push_error(
+            session_id=session_id,
+            user_id=user_id,
+            skill_name=_SKILL_NAME,
             input_data={"markdown_file": str(md_file), "exec_id": exec_id},
-            output_data={"error": err["error"]}, exec_id=exec_id, run_id=run_id)
+            error_msg=err["error"],
+            exec_id=exec_id,
+            run_id=run_id,
+        )
         print(json.dumps(err))
         sys.exit(1)
 
     markdown_text = md_file.read_text(encoding="utf-8")
     if not markdown_text.strip():
         err = {"error": "markdown file is empty"}
-        _rp(session_id, _SKILL_NAME, "error", "error",
+        push_error(
+            session_id=session_id,
+            user_id=user_id,
+            skill_name=_SKILL_NAME,
             input_data={"markdown_file": str(md_file), "exec_id": exec_id},
-            output_data={"error": err["error"]}, exec_id=exec_id, run_id=run_id)
+            error_msg=err["error"],
+            exec_id=exec_id,
+            run_id=run_id,
+        )
         print(json.dumps(err))
         sys.exit(1)
 
@@ -199,20 +170,41 @@ def main():
         "session_id": session_id,
         "title": title,
     }
-    _push_notify(session_id, user_id, "📝 正在生成 Word 合同文件...")
-    _rp(session_id, _SKILL_NAME, "start", "progress", input_data=_input, exec_id=exec_id, run_id=run_id)
+    push(session_id, user_id, "📝 正在生成 Word 合同文件...", msg_type="progress")
+    push_start(
+        session_id=session_id,
+        user_id=user_id,
+        skill_name=_SKILL_NAME,
+        input_data=_input,
+        exec_id=exec_id,
+        run_id=run_id,
+    )
 
     try:
         _build_docx(markdown_text, output_path)
     except ImportError:
         err_msg = "python-docx not installed. Run: pip install python-docx"
-        _rp(session_id, _SKILL_NAME, "error", "error",
-            input_data=_input, output_data={"error": err_msg}, exec_id=exec_id, run_id=run_id)
+        push_error(
+            session_id=session_id,
+            user_id=user_id,
+            skill_name=_SKILL_NAME,
+            input_data=_input,
+            error_msg=err_msg,
+            exec_id=exec_id,
+            run_id=run_id,
+        )
         print(json.dumps({"error": err_msg}))
         sys.exit(1)
     except Exception as e:
-        _rp(session_id, _SKILL_NAME, "error", "error",
-            input_data=_input, output_data={"error": str(e)}, exec_id=exec_id, run_id=run_id)
+        push_error(
+            session_id=session_id,
+            user_id=user_id,
+            skill_name=_SKILL_NAME,
+            input_data=_input,
+            error_msg=str(e),
+            exec_id=exec_id,
+            run_id=run_id,
+        )
         print(json.dumps({"error": str(e)}))
         sys.exit(1)
 
@@ -235,10 +227,27 @@ def main():
         "file_size": file_size,
     }
 
-    _push_notify(session_id, user_id, f"✅ 合同文件已生成：{filename}", "result")
-    _rp(session_id, _SKILL_NAME, "end", "contract_draft_task_end",
-        input_data=_input, output_data=result,
-        exec_id=exec_id, run_id=run_id)
+    push(session_id, user_id, f"✅ 合同文件已生成：{filename}", msg_type="result")
+    push_running(
+        session_id=session_id,
+        user_id=user_id,
+        skill_name=_SKILL_NAME,
+        render_type="llm_draft_success",
+        input_data=_input,
+        output_data=result,
+        exec_id=exec_id,
+        run_id=run_id,
+    )
+    push_end(
+        session_id=session_id,
+        user_id=user_id,
+        skill_name=_SKILL_NAME,
+        input_data=_input,
+        output_data=result,
+        render_type="agent_end",
+        exec_id=exec_id,
+        run_id=run_id,
+    )
 
     print(json.dumps(result, ensure_ascii=False))
 

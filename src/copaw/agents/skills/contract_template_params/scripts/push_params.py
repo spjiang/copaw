@@ -1,121 +1,281 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Push contract template params extraction result to Redis Stream.
+"""Normalize and push contract template params schema/result.
 
 Usage:
-    python push_params.py <params_json_file> [exec_id] [session_id]
-
-Output (stdout): JSON  { "ok": true } | { "error": "..." }
+    python push_params.py <params_json_file> [exec_id] [session_id] [user_id]
 """
+
+from __future__ import annotations
+
 import json
 import os
 import sys
+import time
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
-_SKILL = "参数提取智能体"
+_CUR_DIR = Path(__file__).resolve().parent
+_SKILLS_DIR = _CUR_DIR.parent.parent
+sys.path.insert(0, str(_SKILLS_DIR))
+
+from shared.push import push
+from shared.redis_push import push_end, push_error, push_running, push_start
+
+SKILL_NAME = "contract_template_params"
 
 
-# ---------------------------------------------------------------------------
-# 内联 Redis push（不依赖 shared 导入）
-# ---------------------------------------------------------------------------
-def _rp(session_id, skill_name, stage, render_type,
-        input_data=None, output_data=None,
-        exec_id="", run_id="", runtime_ms=0):
-    try:
-        import redis as _r
-        _cli = _r.Redis(
-            host=os.environ.get("REDIS_HOST", "127.0.0.1"),
-            port=int(os.environ.get("REDIS_PORT", "6379")),
-            password=os.environ.get("REDIS_PASSWORD") or None,
-            db=int(os.environ.get("REDIS_DB", "0")),
-            socket_connect_timeout=2, socket_timeout=3, decode_responses=True,
-        )
-        _cli.ping()
-        _payload = {
-            "session_id": session_id, "exec_id": exec_id, "run_id": run_id,
-            "skill_name": skill_name, "stage": stage, "render_type": render_type,
-            "input": input_data or {}, "output": output_data or {},
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
-            "runtime_ms": runtime_ms,
+def _clean_json_file(path: Path) -> dict:
+    raw = path.read_text(encoding="utf-8").strip()
+    if raw.startswith("```"):
+        raw = "\n".join(line for line in raw.splitlines() if not line.strip().startswith("```")).strip()
+    data = json.loads(raw)
+    if isinstance(data, dict):
+        return data
+    raise ValueError("params json must be an object")
+
+
+def _is_schema_dict_format(schema: Any) -> bool:
+    """Detect {key: {desc, value}} format (from DB).
+
+    Example:
+        {
+            "company_a": {"desc": "甲方公司名称", "value": ""},
+            "contract_effect_year": {"desc": "合同生效年份", "value": "2025"}
         }
-        _cli.xadd(session_id, {"data": json.dumps(_payload, ensure_ascii=False)}, maxlen=500)
-        print(f"[redis] → {session_id} skill={skill_name} stage={stage}", file=sys.stderr)
-    except Exception as _e:
-        print(f"[redis] skip: {_e}", file=sys.stderr)
+    """
+    if not isinstance(schema, dict):
+        return False
+    if "params" in schema or "template_id" in schema:
+        return False
+    return any(
+        isinstance(v, dict) and ("desc" in v or "value" in v)
+        for v in schema.values()
+    )
 
 
-def _push_bubble(session_id, user_id, msg, msg_type="progress"):
-    try:
-        import urllib.request as _ur
-        _body = json.dumps({
-            "session_id": session_id, "user_id": user_id,
-            "text": msg, "msg_type": msg_type,
-            "subscribe_id": f"{session_id}_{user_id}",
-        }).encode()
-        _req = _ur.Request(
-            "http://127.0.0.1:8088/api/console/internal-push",
-            data=_body, headers={"Content-Type": "application/json"}, method="POST",
-        )
-        _ur.urlopen(_req, timeout=3)
-    except Exception:
-        pass
+def _parse_schema_dict(schema: dict) -> list[dict]:
+    """Convert {key: {desc, value}} → normalized params list."""
+    result = []
+    for idx, (key, meta) in enumerate(schema.items(), start=1):
+        if not isinstance(meta, dict):
+            continue
+        desc = str(meta.get("desc") or key)
+        raw_value = meta.get("value")
+        # Handle nested list values (e.g. product_list table rows)
+        if isinstance(raw_value, list):
+            value = json.dumps(raw_value, ensure_ascii=False) if raw_value else None
+            field_type = "table"
+        else:
+            value = raw_value if raw_value not in (None, "") else None
+            field_type = "text"
+        result.append({
+            "param_id": f"p{idx:03d}",
+            "label": desc,
+            "field_name": key,
+            "value": value,
+            "required": True,
+            "type": field_type,
+            "placeholder": f"请填写{desc}",
+            "options": None,
+            "group": _infer_group(key),
+        })
+    return result
+
+
+def _infer_group(key: str) -> str:
+    """Infer display group from field key name."""
+    mapping = {
+        ("contract_effect", "contract_amount", "tax_rate", "payment", "installment", "delivery"): "合同条款",
+        ("company_a",): "甲方信息",
+        ("company_b", "party_b"): "乙方信息",
+        ("receiver",): "收货信息",
+        ("attachment",): "附件信息",
+        ("product_list",): "产品清单",
+        ("party_a",): "甲方信息",
+    }
+    for prefixes, group in mapping.items():
+        if any(key.startswith(p) for p in prefixes):
+            return group
+    return "合同参数"
+
+
+def _normalize_params(data: dict) -> dict:
+    template_id = str(data.get("template_id") or "")
+    template_url = str(data.get("template_url") or "")
+
+    # ── 优先提取 param_schema_json ─────────────────────────────────────────
+    schema = data.get("param_schema_json") or data.get("params_schema_json")
+
+    # ── 格式1: {key: {desc, value}} 平铺字典（来自数据库）──────────────────
+    if _is_schema_dict_format(schema):
+        normalized = _parse_schema_dict(schema)
+    # ── 格式2: 根对象本身就是平铺字典 ─────────────────────────────────────
+    elif _is_schema_dict_format(data):
+        normalized = _parse_schema_dict(data)
+    # ── 格式3: {"params": [...]} 数组格式（旧版）──────────────────────────
+    else:
+        if not schema:
+            if isinstance(data.get("params"), list):
+                schema = {"params": data["params"]}
+            else:
+                schema = data
+        params_list = schema.get("params") if isinstance(schema, dict) else []
+        if not isinstance(params_list, list):
+            params_list = []
+        normalized = []
+        for index, item in enumerate(params_list, start=1):
+            if not isinstance(item, dict):
+                continue
+            normalized.append({
+                "param_id": str(item.get("param_id") or f"p{index:03d}"),
+                "label": item.get("label") or item.get("field_name") or f"字段{index}",
+                "field_name": item.get("field_name") or item.get("label") or f"field_{index}",
+                "value": item.get("value"),
+                "required": bool(item.get("required", True)),
+                "type": item.get("type") or "text",
+                "placeholder": item.get("placeholder") or "",
+                "options": item.get("options"),
+                "group": item.get("group") or "合同参数",
+            })
+
+    # ── 格式4: filled_params_json 平铺 key-value（已填值回写场景）──────────
+    if not normalized and isinstance(data.get("filled_params_json"), dict):
+        for index, (key, value) in enumerate(data["filled_params_json"].items(), start=1):
+            normalized.append({
+                "param_id": f"p{index:03d}",
+                "label": key,
+                "field_name": key,
+                "value": value,
+                "required": True,
+                "type": "text",
+                "placeholder": "",
+                "options": None,
+                "group": "合同参数",
+            })
+
+    return {
+        "template_id": template_id,
+        "template_url": template_url,
+        "param_schema_json": {"params": normalized},
+        "params": normalized,
+    }
 
 
 def main():
     if len(sys.argv) < 2:
-        print(json.dumps({"error": "usage: push_params.py <params_json_file> [exec_id] [session_id]"}))
+        print(json.dumps({"error": "usage: push_params.py <params_json_file> [exec_id] [session_id] [user_id]"}))
         sys.exit(1)
 
+    start_time = time.time()
     params_file = Path(sys.argv[1])
-    exec_id     = sys.argv[2] if len(sys.argv) > 2 else ""
-    session_id  = (
-        os.environ.get("COPAW_SESSION_ID")
-        or (sys.argv[3] if len(sys.argv) > 3 else "")
-        or "unknown_session"
-    )
-    user_id     = os.environ.get("COPAW_USER_ID") or "unknown_user"
-    run_id      = str(uuid.uuid4())
-    _input      = {"params_file": str(params_file), "exec_id": exec_id}
+    exec_id = sys.argv[2] if len(sys.argv) > 2 else ""
+    session_id = os.environ.get("COPAW_SESSION_ID") or (sys.argv[3] if len(sys.argv) > 3 else "") or "unknown_session"
+    user_id = os.environ.get("COPAW_USER_ID") or (sys.argv[4] if len(sys.argv) > 4 else "") or "unknown_user"
+    run_id = str(uuid.uuid4())
+    input_data = {"params_file": str(params_file), "exec_id": exec_id}
 
-    _push_bubble(session_id, user_id, "🧩 正在推送模板参数到 Redis...")
-    _rp(session_id, _SKILL, "start", "progress", input_data=_input, exec_id=exec_id, run_id=run_id)
+    push(session_id, user_id, "🧩 正在整理合同模板参数...", msg_type="progress")
+    push_start(
+        session_id=session_id,
+        user_id=user_id,
+        skill_name=SKILL_NAME,
+        input_data=input_data,
+        exec_id=exec_id,
+        run_id=run_id,
+    )
 
     if not params_file.exists():
-        err = f"params file not found: {params_file}"
-        _rp(session_id, _SKILL, "error", "error",
-            input_data=_input, output_data={"error": err},
-            exec_id=exec_id, run_id=run_id)
-        print(json.dumps({"error": err}))
+        error_message = f"params file not found: {params_file}"
+        push_error(
+            session_id=session_id,
+            user_id=user_id,
+            skill_name=SKILL_NAME,
+            input_data=input_data,
+            error_msg=error_message,
+            exec_id=exec_id,
+            run_id=run_id,
+        )
+        print(json.dumps({"error": error_message}, ensure_ascii=False))
         sys.exit(1)
 
     try:
-        raw = params_file.read_text(encoding="utf-8").strip()
-        # 兼容 LLM 有时会在 JSON 外面包裹 ```json ... ``` 代码块
-        if raw.startswith("```"):
-            lines = raw.splitlines()
-            raw = "\n".join(
-                line for line in lines
-                if not line.strip().startswith("```")
-            ).strip()
+        data = _clean_json_file(params_file)
+        normalized = _normalize_params(data)
+        params_file.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        params_data = json.loads(raw)
-    except Exception as e:
-        _rp(session_id, _SKILL, "error", "error",
-            input_data=_input, output_data={"error": f"JSON 解析失败：{e}"},
-            exec_id=exec_id, run_id=run_id)
-        print(json.dumps({"error": f"JSON parse error: {e}"}))
+        params = normalized.get("params", [])
+        required_count = sum(1 for item in params if item.get("required"))
+        filled_count = sum(1 for item in params if item.get("value") not in (None, ""))
+        missing_fields = [item.get("field_name") for item in params if item.get("required") and item.get("value") in (None, "")]
+        runtime_ms = int((time.time() - start_time) * 1000)
+
+        push_running(
+            session_id=session_id,
+            user_id=user_id,
+            skill_name=SKILL_NAME,
+            render_type="template_params_required" if missing_fields else "template_params_completed",
+            input_data=input_data,
+            output_data={
+                "template_id": normalized.get("template_id", ""),
+                "template_url": normalized.get("template_url", ""),
+                "required_param_count": required_count,
+                "filled_param_count": filled_count,
+                "missing_fields": missing_fields,
+                "param_schema_json": normalized.get("param_schema_json", {}),
+            },
+            exec_id=exec_id,
+            run_id=run_id,
+            runtime_ms=runtime_ms,
+        )
+        push_end(
+            session_id=session_id,
+            user_id=user_id,
+            skill_name=SKILL_NAME,
+            input_data=input_data,
+            output_data={
+                "template_id": normalized.get("template_id", ""),
+                "template_url": normalized.get("template_url", ""),
+                "param_schema_json": normalized.get("param_schema_json", {}),
+                "required_param_count": required_count,
+                "filled_param_count": filled_count,
+                "missing_fields": missing_fields,
+            },
+            render_type="agent_end",
+            exec_id=exec_id,
+            run_id=run_id,
+            runtime_ms=runtime_ms,
+        )
+        push(session_id, user_id, f"✅ 合同参数已整理，共 {len(params)} 项", msg_type="result")
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "params_file": str(params_file),
+                    "param_count": len(params),
+                    "required_param_count": required_count,
+                    "filled_param_count": filled_count,
+                    "missing_fields": missing_fields,
+                },
+                ensure_ascii=False,
+            )
+        )
+    except Exception as exc:
+        runtime_ms = int((time.time() - start_time) * 1000)
+        push(session_id, user_id, f"❌ 合同参数处理失败：{exc}", msg_type="error")
+        push_error(
+            session_id=session_id,
+            user_id=user_id,
+            skill_name=SKILL_NAME,
+            input_data=input_data,
+            error_msg=str(exc),
+            exec_id=exec_id,
+            run_id=run_id,
+            runtime_ms=runtime_ms,
+        )
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False))
         sys.exit(1)
-
-    param_count = len(params_data.get("params", []))
-    _push_bubble(session_id, user_id,
-                 f"✅ 合同参数提取完成，共 {param_count} 个参数项", "result")
-    _rp(session_id, _SKILL, "end", "contract_template_params",
-        input_data=_input, output_data=params_data,
-        exec_id=exec_id, run_id=run_id)
-
-    print(json.dumps({"ok": True, "param_count": param_count}, ensure_ascii=False))
 
 
 if __name__ == "__main__":
