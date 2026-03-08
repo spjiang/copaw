@@ -29,8 +29,10 @@ interface SkillEvent {
   session_id?: string;
   exec_id?: string;
   skill_name?: string;
-  stage?: "start" | "end" | "error";
+  skill_label?: string;
+  stage?: "start" | "running" | "end" | "error";
   render_type?: string;
+  event_name?: string;
   input?: Record<string, unknown>;
   output?: Record<string, unknown>;
   timestamp?: string;
@@ -39,6 +41,7 @@ interface SkillEvent {
 
 const STAGE_CONFIG = {
   start: { color: "processing", icon: <ClockCircleOutlined />, label: "开始" },
+  running: { color: "processing", icon: <LoadingOutlined />, label: "进行中" },
   end:   { color: "success",    icon: <CheckCircleOutlined />,  label: "完成" },
   error: { color: "error",      icon: <CloseCircleOutlined />,  label: "错误" },
 } as const;
@@ -78,6 +81,8 @@ function EventCard({ event, index }: { event: SkillEvent; index: number }) {
   const stage = event.stage as keyof typeof STAGE_CONFIG | undefined;
   const stageCfg = stage ? STAGE_CONFIG[stage] : null;
   const skillColor = SKILL_COLORS[event.skill_name || ""] || "#595959";
+  const displaySkillName = event.skill_label || event.skill_name || event.type;
+  const displayEventName = event.event_name || event.render_type || "未命名事件";
   const time = event.timestamp
     ? new Date(event.timestamp).toLocaleTimeString("zh-CN", { hour12: false })
     : "";
@@ -114,7 +119,7 @@ function EventCard({ event, index }: { event: SkillEvent; index: number }) {
             color={skillColor}
             style={{ fontSize: 11, fontWeight: 600, margin: 0 }}
           >
-            {event.skill_name || event.type}
+            {displaySkillName}
           </Tag>
           {stageCfg && (
             <Badge
@@ -126,6 +131,9 @@ function EventCard({ event, index }: { event: SkillEvent; index: number }) {
               }
             />
           )}
+          <Text strong style={{ fontSize: 12 }}>
+            {displayEventName}
+          </Text>
           {event.render_type && (
             <Tag style={{ fontSize: 10, margin: 0, color: "#666" }} bordered={false}>
               {event.render_type}

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Shared search utilities for contract template matching scripts."""
+"""Shared search utilities for contract draft internal scripts."""
 
 from __future__ import annotations
 
@@ -295,18 +295,6 @@ def search_templates(
     contract_type: str = "",
     top_k: int = 5,
 ) -> dict[str, Any]:
-    """Search contract templates from template search API.
-
-    Returns:
-        {
-            "total": int,
-            "templates": [{ template_id, title, template_name, contract_type,
-                             sub_type, file_path, template_url, param_schema_json }],
-            "detected_contract_type": str,
-            "keyword_list": [str],
-            "source": "api" | "none"
-        }
-    """
     query = clean_text(query_text)
     detected_contract_type = contract_type or infer_contract_type(query)
     keywords = keyword_list or extract_keywords(query, contract_type=detected_contract_type)
@@ -319,23 +307,3 @@ def search_templates(
         "keyword_list": keywords,
         "source": "api" if api_templates else "none",
     }
-
-
-def fetch_template_by_id(template_id: str) -> dict[str, Any]:
-    """Fetch a single template record by ID when available.
-
-    The current search API only exposes keyword search, so this helper falls
-    back to a broad lookup and then filters in memory.
-    """
-    try:
-        payload = _call_search_api(keyword=template_id, limit=50, offset=0)
-        rows = payload.get("rows") or []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            normalized = _normalize_api_template(row)
-            if normalized.get("template_id") == str(template_id):
-                return normalized
-        return {"error": f"template {template_id} not found"}
-    except Exception as exc:
-        return {"error": str(exc)}

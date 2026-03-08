@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Template search by user intent text.
-
-Usage:
-    python template_match.py <session_id> <user_id> <exec_id> <query_text> [contract_type]
-"""
+"""Template search by user intent text for contract_draft."""
 
 from __future__ import annotations
 
@@ -20,12 +16,10 @@ _SKILLS_DIR = _CUR_DIR.parent.parent
 sys.path.insert(0, str(_CUR_DIR))
 sys.path.insert(0, str(_SKILLS_DIR))
 
+from event_meta import SKILL_LABEL, SKILL_NAME, get_event_name
+from push import push
+from redis_push import push_end, push_error, push_running, push_start
 from search_common import extract_keywords, infer_contract_type, search_templates
-from shared.push import push
-from shared.redis_push import push_end, push_error, push_running, push_start
-
-SKILL_NAME = "contract_template_match"
-
 
 def main():
     if len(sys.argv) < 5:
@@ -48,14 +42,16 @@ def main():
         "keyword_list": keyword_list,
     }
 
-    push(session_id, user_id, "🔍 正在检索合同模板...", msg_type="progress")
     push_start(
         session_id=session_id,
         user_id=user_id,
         skill_name=SKILL_NAME,
+        skill_label=SKILL_LABEL,
+        event_name=get_event_name("template_match_started"),
         input_data=input_data,
         exec_id=exec_id,
         run_id=run_id,
+        render_type="template_match_started",
     )
 
     try:
@@ -73,6 +69,8 @@ def main():
                 session_id=session_id,
                 user_id=user_id,
                 skill_name=SKILL_NAME,
+                skill_label=SKILL_LABEL,
+                event_name=get_event_name("user_intent_required"),
                 render_type="user_intent_required",
                 input_data=input_data,
                 output_data={"message": "无法识别合同类型，需要用户进一步说明"},
@@ -84,9 +82,11 @@ def main():
                 session_id=session_id,
                 user_id=user_id,
                 skill_name=SKILL_NAME,
+                skill_label=SKILL_LABEL,
+                event_name=get_event_name("template_match_finished"),
                 input_data=input_data,
                 output_data=result,
-                render_type="agent_end",
+                render_type="template_match_finished",
                 exec_id=exec_id,
                 run_id=run_id,
                 runtime_ms=runtime_ms,
@@ -98,6 +98,8 @@ def main():
             session_id=session_id,
             user_id=user_id,
             skill_name=SKILL_NAME,
+            skill_label=SKILL_LABEL,
+            event_name=get_event_name("user_intent_identified"),
             render_type="user_intent_identified",
             input_data={"query_text": query_text},
             output_data={
@@ -124,6 +126,8 @@ def main():
                 session_id=session_id,
                 user_id=user_id,
                 skill_name=SKILL_NAME,
+                skill_label=SKILL_LABEL,
+                event_name=get_event_name("template_candidates_found"),
                 render_type="template_candidates_found",
                 input_data=input_data,
                 output_data={
@@ -135,11 +139,12 @@ def main():
                 runtime_ms=runtime_ms,
             )
         else:
-            push(session_id, user_id, "ℹ️ 未匹配到标准合同模板", msg_type="progress")
             push_running(
                 session_id=session_id,
                 user_id=user_id,
                 skill_name=SKILL_NAME,
+                skill_label=SKILL_LABEL,
+                event_name=get_event_name("template_not_found"),
                 render_type="template_not_found",
                 input_data=input_data,
                 output_data={"template_count": 0, "template_list": []},
@@ -152,9 +157,11 @@ def main():
             session_id=session_id,
             user_id=user_id,
             skill_name=SKILL_NAME,
+            skill_label=SKILL_LABEL,
+            event_name=get_event_name("template_match_finished"),
             input_data=input_data,
             output_data=result,
-            render_type="agent_end",
+            render_type="template_match_finished",
             exec_id=exec_id,
             run_id=run_id,
             runtime_ms=runtime_ms,
@@ -167,6 +174,8 @@ def main():
             session_id=session_id,
             user_id=user_id,
             skill_name=SKILL_NAME,
+            skill_label=SKILL_LABEL,
+            event_name="模板匹配失败",
             input_data=input_data,
             error_msg=str(exc),
             exec_id=exec_id,

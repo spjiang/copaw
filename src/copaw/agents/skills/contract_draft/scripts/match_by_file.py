@@ -1,21 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Template search by uploaded attachment.
-
-Extracts text from the uploaded file, infers contract type + keywords,
-then searches the template API for matching templates.
-
-Usage:
-    python match_by_file.py <session_id> <user_id> <exec_id> <file_path_or_url>
-
-Or set COPAW_INPUT_FILE_URLS env var and use a placeholder for the last arg.
-"""
+"""Template search by uploaded attachment for contract_draft."""
 
 from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 import tempfile
 import time
@@ -29,17 +19,13 @@ _SKILLS_DIR = _CUR_DIR.parent.parent
 sys.path.insert(0, str(_CUR_DIR))
 sys.path.insert(0, str(_SKILLS_DIR))
 
-from search_common import extract_keywords, infer_contract_type, normalize_filename, search_templates
-from shared.push import push
-from shared.redis_push import push_end, push_error, push_running, push_start
+from event_meta import SKILL_LABEL, SKILL_NAME, get_event_name
+from push import push
+from redis_push import push_end, push_error, push_running, push_start
+from search_common import extract_keywords, infer_contract_type, search_templates
 
-SKILL_NAME = "contract_template_match"
 SUPPORTED_EXTS = {".docx", ".doc", ".pdf", ".txt", ".md", ".wps"}
 
-
-# ---------------------------------------------------------------------------
-# File text extraction
-# ---------------------------------------------------------------------------
 
 def extract_text(file_path: str) -> str:
     path = Path(file_path)
@@ -47,6 +33,7 @@ def extract_text(file_path: str) -> str:
 
     if ext == ".docx":
         from docx import Document
+
         doc = Document(file_path)
         blocks = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
         for table in doc.tables:
@@ -60,9 +47,12 @@ def extract_text(file_path: str) -> str:
     if ext == ".doc":
         try:
             import subprocess
+
             result = subprocess.run(
                 ["textutil", "-convert", "txt", "-stdout", file_path],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
             if result.returncode == 0 and result.stdout.strip():
                 return result.stdout.strip()
@@ -72,6 +62,7 @@ def extract_text(file_path: str) -> str:
 
     if ext == ".pdf":
         import pdfplumber
+
         with pdfplumber.open(file_path) as pdf:
             return "\n".join(page.extract_text() or "" for page in pdf.pages)
 
@@ -80,10 +71,6 @@ def extract_text(file_path: str) -> str:
 
     return path.stem
 
-
-# ---------------------------------------------------------------------------
-# HTTP helper
-# ---------------------------------------------------------------------------
 
 def _is_http_url(value: str) -> bool:
     parsed = urllib.parse.urlparse(value)
@@ -100,10 +87,6 @@ def _download_to_temp(url: str) -> str:
             f.write(response.read())
     return target
 
-
-# ---------------------------------------------------------------------------
-# Resolve file input (env var takes precedence over argv)
-# ---------------------------------------------------------------------------
 
 def _pick_file_input(argv_file_input: str) -> str:
     raw = (os.environ.get("COPAW_INPUT_FILE_URLS") or "").strip()
@@ -138,10 +121,6 @@ def _pick_file_input(argv_file_input: str) -> str:
     return (parts[-1] if parts else "") or argv_file_input
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main():
     if len(sys.argv) < 5:
         print(json.dumps({"error": "usage: match_by_file.py session_id user_id exec_id file_path_or_url"}))
@@ -156,18 +135,19 @@ def main():
     temp_file = None
 
     input_data = {"file_ref": file_input}
-    push(session_id, user_id, "📄 正在分析上传附件并匹配合同模板...", msg_type="progress")
     push_start(
         session_id=session_id,
         user_id=user_id,
         skill_name=SKILL_NAME,
+        skill_label=SKILL_LABEL,
+        event_name=get_event_name("template_match_started"),
         input_data=input_data,
         exec_id=exec_id,
         run_id=run_id,
+        render_type="template_match_started",
     )
 
     try:
-        # ── 下载 or 读取本地文件 ───────────────────────────────────────────
         if _is_http_url(file_input):
             temp_file = _download_to_temp(file_input)
             file_path = temp_file
@@ -183,6 +163,8 @@ def main():
             session_id=session_id,
             user_id=user_id,
             skill_name=SKILL_NAME,
+            skill_label=SKILL_LABEL,
+            event_name=get_event_name("attachment_detected"),
             render_type="attachment_detected",
             input_data=input_data,
             output_data={
@@ -193,7 +175,6 @@ def main():
             run_id=run_id,
         )
 
-        # ── 提取文本，推断合同类型和关键词 ────────────────────────────────
         text = extract_text(file_path)
         if not text.strip():
             raise RuntimeError("附件文本提取为空，无法进行模板匹配")
@@ -206,6 +187,8 @@ def main():
             session_id=session_id,
             user_id=user_id,
             skill_name=SKILL_NAME,
+            skill_label=SKILL_LABEL,
+            event_name=get_event_name("user_intent_identified"),
             render_type="user_intent_identified",
             input_data={"file_name": file_name},
             output_data={
@@ -217,7 +200,6 @@ def main():
             run_id=run_id,
         )
 
-        # ── 调用模板检索 API 匹配模板 ─────────────────────────────────────
         result = search_templates(
             query_text=" ".join(keyword_list) or text[:2000],
             keyword_list=keyword_list,
@@ -240,13 +222,14 @@ def main():
             }
         else:
             render_type = "template_not_found"
-            push(session_id, user_id, "ℹ️ 上传附件未匹配到标准模板", msg_type="progress")
             output_data = {"template_count": 0, "template_list": []}
 
         push_running(
             session_id=session_id,
             user_id=user_id,
             skill_name=SKILL_NAME,
+            skill_label=SKILL_LABEL,
+            event_name=get_event_name(render_type),
             render_type=render_type,
             input_data={"file_ref": file_input, "file_name": file_name, "keyword_list": keyword_list},
             output_data=output_data,
@@ -258,9 +241,11 @@ def main():
             session_id=session_id,
             user_id=user_id,
             skill_name=SKILL_NAME,
+            skill_label=SKILL_LABEL,
+            event_name=get_event_name("template_match_finished"),
             input_data=input_data,
             output_data=result,
-            render_type="agent_end",
+            render_type="template_match_finished",
             exec_id=exec_id,
             run_id=run_id,
             runtime_ms=runtime_ms,
@@ -274,6 +259,8 @@ def main():
             session_id=session_id,
             user_id=user_id,
             skill_name=SKILL_NAME,
+            skill_label=SKILL_LABEL,
+            event_name="附件模板匹配失败",
             input_data=input_data,
             error_msg=str(exc),
             exec_id=exec_id,

@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Render a contract template through the external render API.
-
-Usage:
-    python render_template.py <template_url> <params_json_file> [exec_id] [session_id] [user_id]
-"""
+"""Render a contract template through the external render API for contract_draft."""
 
 from __future__ import annotations
 
@@ -23,17 +19,17 @@ except ImportError:  # pragma: no cover
 
 _CUR_DIR = Path(__file__).resolve().parent
 _SKILLS_DIR = _CUR_DIR.parent.parent
+sys.path.insert(0, str(_CUR_DIR))
 sys.path.insert(0, str(_SKILLS_DIR))
 
-from shared.push import push
-from shared.redis_push import push_end, push_error, push_running, push_start
+from event_meta import SKILL_LABEL, SKILL_NAME, get_event_name
+from push import push
+from redis_push import push_end, push_error, push_running, push_start
 
 RENDER_API = os.environ.get("TEMPLATE_RENDER_API", "http://10.17.55.121:8012/render")
-SKILL_NAME = "contract_template_params"
 
 
 def _is_schema_dict_format(obj: Any) -> bool:
-    """Detect {key: {desc, value}} format (data from DB)."""
     if not isinstance(obj, dict):
         return False
     if "params" in obj or "template_id" in obj or "template_url" in obj:
@@ -42,18 +38,12 @@ def _is_schema_dict_format(obj: Any) -> bool:
 
 
 def _schema_dict_to_flat(schema: dict) -> dict:
-    """Convert {key: {desc, value}} → {key: value} flat dict for render API.
-
-    Only includes keys where value is non-empty.
-    List values (e.g. product_list) are kept as-is.
-    """
     flat: dict = {}
     for key, meta in schema.items():
         if not isinstance(meta, dict):
             continue
         value = meta.get("value")
         if isinstance(value, list):
-            # Keep list values (e.g. product_list table rows) as-is
             if value:
                 flat[key] = value
         elif value not in (None, ""):
@@ -62,14 +52,6 @@ def _schema_dict_to_flat(schema: dict) -> dict:
 
 
 def _load_params_text(params_file: Path) -> tuple[str, dict]:
-    """Load and parse params file, return (text_for_render_api, original_data).
-
-    Supports three input formats:
-      1. {key: {desc, value}}            — DB param_schema_json format (primary)
-      2. {template_id, template_url,
-          param_schema_json: {params:[]} } — normalized array format (legacy)
-      3. {key: value}                    — already flat (pass-through)
-    """
     raw = params_file.read_text(encoding="utf-8").strip()
     if raw.startswith("```"):
         raw = "\n".join(line for line in raw.splitlines() if not line.strip().startswith("```")).strip()
@@ -78,12 +60,10 @@ def _load_params_text(params_file: Path) -> tuple[str, dict]:
     if not isinstance(data, dict):
         raise ValueError(f"params file must contain a JSON object, got: {type(data)}")
 
-    # ── Format 1: {key: {desc, value}} ─────────────────────────────────────
     if _is_schema_dict_format(data):
         flat = _schema_dict_to_flat(data)
         return json.dumps(flat, ensure_ascii=False), data
 
-    # ── Format 2: nested schema with param_schema_json or params list ──────
     schema = data.get("param_schema_json")
     if _is_schema_dict_format(schema):
         flat = _schema_dict_to_flat(schema)
@@ -111,7 +91,6 @@ def _load_params_text(params_file: Path) -> tuple[str, dict]:
                 flat[str(key)] = value
         return json.dumps(flat, ensure_ascii=False), data
 
-    # ── Format 3: already flat {key: value} ────────────────────────────────
     return json.dumps(data, ensure_ascii=False), data
 
 
@@ -133,14 +112,16 @@ def main():
     run_id = str(uuid.uuid4())
     input_data = {"template_url": template_url, "params_file": str(params_file)}
 
-    push(session_id, user_id, "🧩 正在调用模板渲染接口...", msg_type="progress")
     push_start(
         session_id=session_id,
         user_id=user_id,
         skill_name=SKILL_NAME,
+        skill_label=SKILL_LABEL,
+        event_name=get_event_name("template_render_prepare"),
         input_data=input_data,
         exec_id=exec_id,
         run_id=run_id,
+        render_type="template_render_prepare",
     )
 
     try:
@@ -154,6 +135,8 @@ def main():
             session_id=session_id,
             user_id=user_id,
             skill_name=SKILL_NAME,
+            skill_label=SKILL_LABEL,
+            event_name=get_event_name("template_render_started"),
             render_type="template_render_started",
             input_data=input_data,
             output_data={"template_url": template_url},
@@ -182,6 +165,8 @@ def main():
             session_id=session_id,
             user_id=user_id,
             skill_name=SKILL_NAME,
+            skill_label=SKILL_LABEL,
+            event_name=get_event_name("template_render_success"),
             render_type="template_render_success",
             input_data=input_data,
             output_data=result,
@@ -193,9 +178,11 @@ def main():
             session_id=session_id,
             user_id=user_id,
             skill_name=SKILL_NAME,
+            skill_label=SKILL_LABEL,
+            event_name=get_event_name("template_render_finished"),
             input_data=input_data,
             output_data=result,
-            render_type="agent_end",
+            render_type="template_render_finished",
             exec_id=exec_id,
             run_id=run_id,
             runtime_ms=runtime_ms,
@@ -208,6 +195,8 @@ def main():
             session_id=session_id,
             user_id=user_id,
             skill_name=SKILL_NAME,
+            skill_label=SKILL_LABEL,
+            event_name=get_event_name("template_render_failed"),
             render_type="template_render_failed",
             input_data=input_data,
             output_data={"error_message": str(exc)},
@@ -219,6 +208,8 @@ def main():
             session_id=session_id,
             user_id=user_id,
             skill_name=SKILL_NAME,
+            skill_label=SKILL_LABEL,
+            event_name="模板渲染异常",
             input_data=input_data,
             error_msg=str(exc),
             exec_id=exec_id,
