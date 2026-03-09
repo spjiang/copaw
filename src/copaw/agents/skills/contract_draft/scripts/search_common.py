@@ -225,8 +225,14 @@ def count_param_schema_fields(schema: Any) -> int:
 
 def _normalize_api_template(row: dict[str, Any]) -> dict[str, Any]:
     title = row.get("title") or row.get("template_name") or row.get("name") or ""
-    file_path = row.get("file_path") or row.get("template_path") or row.get("path") or ""
-    template_url = row.get("template_url") or build_template_url(file_path)
+    file_path_source = (
+        row.get("file_path_source")
+        or row.get("file_path")
+        or row.get("template_path")
+        or row.get("path")
+        or ""
+    )
+    template_url = row.get("template_url") or build_template_url(str(file_path_source))
     template_id = str(row.get("id") or row.get("template_id") or "")
     raw_contract_type = row.get("contract_type") or ""
     contract_type = normalize_contract_type(raw_contract_type) or infer_contract_type(title)
@@ -256,7 +262,8 @@ def _normalize_api_template(row: dict[str, Any]) -> dict[str, Any]:
         "raw_contract_type": raw_contract_type,
         "contract_type": contract_type,
         "sub_type": sub_type,
-        "file_path": file_path,
+        "file_path": file_path_source,
+        "file_path_source": file_path_source,
         "template_url": template_url,
         "param_schema_json": param_schema_json,
     }
