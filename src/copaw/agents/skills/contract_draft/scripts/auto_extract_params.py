@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -12,6 +13,11 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+
+try:
+    import requests
+except ImportError:  # pragma: no cover
+    requests = None  # type: ignore
 
 _CUR_DIR = Path(__file__).resolve().parent
 _SKILLS_DIR = _CUR_DIR.parent.parent
@@ -34,6 +40,15 @@ from param_schema_ops import (
 from push import push
 from redis_push import push_end, push_error, push_running, push_start
 from runtime_context import resolve_input_file_urls, resolve_session_id, resolve_user_id
+
+try:
+    from copaw.providers import get_active_llm_config
+except Exception:  # pragma: no cover
+    get_active_llm_config = None  # type: ignore
+
+
+LLM_CONFIDENCE_THRESHOLD = 0.85
+MAX_LLM_TEXT_CHARS = 50000
 
 
 def _normalize_text(value: str) -> str:
@@ -321,6 +336,184 @@ def _candidate_from_facts(row: dict[str, Any], facts: dict[str, Any], attachment
     return None
 
 
+def _strip_json_fence(text: str) -> str:
+    value = (text or "").strip()
+    if value.startswith("```"):
+        lines = value.splitlines()
+        if lines:
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+    return value
+
+
+def _extract_json_payload(text: str) -> Any:
+    clean = _strip_json_fence(text)
+    if not clean:
+        return None
+    try:
+        return json.loads(clean)
+    except Exception:
+        pass
+    match = re.search(r"(\[.*\]|\{.*\})", clean, re.S)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(1))
+    except Exception:
+        return None
+
+
+def _resolve_llm_config() -> dict[str, str]:
+    model = ""
+    base_url = ""
+    api_key = ""
+    if callable(get_active_llm_config):
+        try:
+            cfg = get_active_llm_config()
+            if cfg and not getattr(cfg, "is_local", False):
+                model = str(getattr(cfg, "model", "") or "").strip()
+                base_url = str(getattr(cfg, "base_url", "") or "").strip()
+                api_key = str(getattr(cfg, "api_key", "") or "").strip()
+        except Exception:
+            pass
+    if not model:
+        model = os.environ.get("CONTRACT_DRAFT_EXTRACT_MODEL", "").strip()
+    if not base_url:
+        base_url = os.environ.get(
+            "CONTRACT_DRAFT_EXTRACT_BASE_URL",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        ).strip()
+    if not api_key:
+        api_key = (
+            os.environ.get("CONTRACT_DRAFT_EXTRACT_API_KEY", "").strip()
+            or os.environ.get("DASHSCOPE_API_KEY", "").strip()
+        )
+    if not model:
+        model = "qwen-plus"
+    return {"model": model, "base_url": base_url, "api_key": api_key}
+
+
+def _extract_candidates_by_llm(rows: list[dict[str, Any]], material_text: str, attachments: list[str]) -> dict[str, dict[str, Any]]:
+    if requests is None or not rows or not material_text.strip():
+        return {}
+    cfg = _resolve_llm_config()
+    base_url = cfg.get("base_url", "").rstrip("/")
+    api_key = cfg.get("api_key", "").strip()
+    model = cfg.get("model", "").strip()
+    if not base_url or not api_key or not model:
+        return {}
+
+    field_specs = []
+    for row in rows:
+        path = str(row.get("path") or "").strip()
+        if not path:
+            continue
+        field_specs.append(
+            {
+                "path": path,
+                "field_name": str(row.get("field_name") or ""),
+                "desc": str(row.get("desc") or ""),
+                "group": str(row.get("group") or ""),
+                "required": bool(row.get("required", True)),
+                "current_value": row.get("value"),
+            }
+        )
+    if not field_specs:
+        return {}
+
+    user_prompt = {
+        "task": "根据合同附件文本抽取字段值并映射到给定 path",
+        "rules": [
+            "只返回 JSON，不要解释",
+            "仅可输出字段列表中的 path",
+            "无法确定就不要输出该字段",
+            "confidence 为 0~1 的小数",
+            "value 必须是字符串",
+        ],
+        "fields": field_specs,
+        "material_text": material_text[:MAX_LLM_TEXT_CHARS],
+        "output_format": [
+            {
+                "path": "字段 path",
+                "value": "提取值字符串",
+                "confidence": 0.95,
+                "reason": "简短提取依据",
+                "evidence": "附件中的原文片段",
+            }
+        ],
+    }
+    payload = {
+        "model": model,
+        "temperature": 0.1,
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是合同参数提取助手。严格按用户要求输出 JSON。",
+            },
+            {
+                "role": "user",
+                "content": json.dumps(user_prompt, ensure_ascii=False),
+            },
+        ],
+    }
+
+    endpoint = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
+    try:
+        resp = requests.post(
+            endpoint,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=90,
+        )
+        if not resp.ok:
+            return {}
+        data = resp.json()
+        content = (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+        parsed = _extract_json_payload(str(content))
+    except Exception:
+        return {}
+
+    if isinstance(parsed, dict):
+        parsed = parsed.get("results") or parsed.get("items") or []
+    if not isinstance(parsed, list):
+        return {}
+
+    best: dict[str, dict[str, Any]] = {}
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or "").strip()
+        value = str(item.get("value") or "").strip()
+        if not path or not value:
+            continue
+        try:
+            confidence = float(item.get("confidence") or 0)
+        except Exception:
+            confidence = 0.0
+        if confidence < LLM_CONFIDENCE_THRESHOLD:
+            continue
+        candidate = {
+            "value": value,
+            "confidence": confidence,
+            "reason": str(item.get("reason") or "llm_extract"),
+            "evidence": str(item.get("evidence") or ""),
+            "attachments": attachments,
+        }
+        prev = best.get(path)
+        if prev is None or float(prev.get("confidence") or 0) < confidence:
+            best[path] = candidate
+    return best
+
+
 def _resolve_push_params_script() -> Path:
     local_script = _CUR_DIR / "push_params.py"
     if local_script.exists():
@@ -453,14 +646,25 @@ def main() -> None:
         rows = collect_table_rows(schema)
         updated_paths: list[str] = []
         processed_attachments = [item["ref"] for item in materials]
+        llm_candidates = _extract_candidates_by_llm(
+            rows=rows,
+            material_text=facts.get("combined_text", ""),
+            attachments=processed_attachments,
+        )
+        llm_hit_paths: list[str] = []
+        fallback_hit_paths: list[str] = []
 
         for row in rows:
             path = str(row.get("path") or "").strip()
             current_value = row.get("value")
             if not path:
                 continue
-            candidate = _candidate_from_facts(row, facts, processed_attachments)
-            if not candidate or float(candidate.get("confidence") or 0) < 0.85:
+            candidate = llm_candidates.get(path)
+            used_fallback = False
+            if not candidate:
+                candidate = _candidate_from_facts(row, facts, processed_attachments)
+                used_fallback = True
+            if not candidate or float(candidate.get("confidence") or 0) < LLM_CONFIDENCE_THRESHOLD:
                 continue
             new_value = candidate.get("value")
             if is_blank(new_value):
@@ -473,6 +677,10 @@ def main() -> None:
                     attachments=processed_attachments,
                     reason=str(candidate.get("reason") or ""),
                 )
+                if used_fallback:
+                    fallback_hit_paths.append(path)
+                else:
+                    llm_hit_paths.append(path)
                 continue
             if set_field_value(schema, path, new_value):
                 updated_paths.append(path)
@@ -483,6 +691,10 @@ def main() -> None:
                     attachments=processed_attachments,
                     reason=str(candidate.get("reason") or ""),
                 )
+                if used_fallback:
+                    fallback_hit_paths.append(path)
+                else:
+                    llm_hit_paths.append(path)
 
         payload = replace_schema(payload, schema)
         dump_params_payload(params_file, payload)
@@ -503,6 +715,8 @@ def main() -> None:
             "processed_attachment_count": len(processed_attachments),
             "processed_attachments": processed_attachments,
             "skipped_attachment_refs": skipped_refs,
+            "llm_hit_paths": sorted(set(llm_hit_paths)),
+            "fallback_hit_paths": sorted(set(fallback_hit_paths)),
             "updated_paths": updated_paths,
             "push_params_result": push_params_result,
         }

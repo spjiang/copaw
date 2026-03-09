@@ -26,6 +26,7 @@ from event_meta import SKILL_LABEL, SKILL_NAME, get_event_name
 from push import push
 from redis_push import push_end, push_error, push_running, push_start
 from runtime_context import resolve_session_id, resolve_user_id
+from smart_create_utils import get_file_url_from_smart_create_response
 
 FREE_DRAFT_SAVE_API = os.environ.get(
     "FREE_DRAFT_SAVE_API",
@@ -131,9 +132,9 @@ def main() -> None:
                 f"free draft save api returned non-json response: {response.text[:500]}"
             ) from exc
 
-        result_url = str(payload.get("url") or "").strip()
+        result_url = get_file_url_from_smart_create_response(payload)
         if not result_url:
-            raise RuntimeError("free draft save api returned empty url")
+            raise RuntimeError("free draft save api 返回格式异常，无法解析文件下载地址")
 
         runtime_ms = int((time.time() - start_time) * 1000)
         result = {

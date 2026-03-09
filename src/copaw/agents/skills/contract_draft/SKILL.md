@@ -250,9 +250,9 @@ execute_shell_command("python3 ~/.copaw/active_skills/contract_draft/scripts/pus
 
 - 模板名称 `title`
 - 模板描述 `description`
-- 模板分类 `category`
-- 模板版本 `version`
-- 填充数量：必须基于该模板 `param_schema_json` 的实际参数个数（叶子字段数）展示，禁止直接使用其他来源的估算值
+- 分类 `category`
+- 模型版本 `version`
+- 参数数量：必须基于该模板 `param_schema_json` 的实际参数个数（叶子字段数）展示，禁止直接使用其他来源的估算值
 
 推荐回复格式：
 
@@ -326,8 +326,9 @@ execute_shell_command("python3 ~/.copaw/active_skills/contract_draft/scripts/pus
 
 事件语义要求：
 
-1. 必须先推送 `template_params_finished`，表示前端可以读取 `output.param_schema_json`、`output.param_table` 和 `output.param_table_markdown`，并开始或刷新动态表单 / 参数表格渲染
-2. 再根据是否仍有缺参，继续推送 `template_params_required` 或 `template_params_completed`
+1. 模板确认后的首轮必须推送一次 `template_params_finished`（由 `push_params.py` 产出），表示前端可以读取 `output.param_schema_json`、`output.param_table` 和 `output.param_table_markdown`，并开始或刷新动态表单 / 参数表格渲染
+2. 紧接着只推送一次 `template_params_required` 或 `template_params_completed`
+3. **同一轮里禁止再次推送第二个 `template_params_finished`**，避免前端重复刷新
 
 模板确认后的首轮用户提示要求：
 
@@ -382,7 +383,8 @@ execute_shell_command("python3 ~/.copaw/active_skills/contract_draft/scripts/aut
    - 自动重新执行 `push_params.py`
    - 通过 Redis 刷新 `output.param_schema_json`、`output.param_table`、`output.param_table_markdown`
 2. 然后推送 `template_params_auto_extract_finished`
-3. 再根据最新结果继续推送 `template_params_finished`，并决定是否推送 `template_params_required` 或 `template_params_completed`
+3. **不要在同一轮再额外推送 `template_params_finished`**；`push_params.py` 已经完成该事件的发送
+4. 若需要状态补充，仅根据最新结果推送 `template_params_required` 或 `template_params_completed`
 
 多附件与持续上传规则：
 
@@ -552,7 +554,7 @@ Step 7 循环中的固定回复要求：
 2. 必须结合字段名、字段说明 `desc`、上下文语义判断“用户这句话对应哪个参数”
 3. 对高置信度字段直接回写
 4. 对低置信度或存在歧义的字段，集中列出后一次性请用户确认，不要拆成很多轮
-5. 每次完成一轮解析后，都要重新推送 `template_params_finished`
+5. 每次完成一轮解析后，都要确保这一轮仅有一次 `template_params_finished`（通常通过重新执行 `push_params.py` 实现）；禁止同一轮重复发送
 6. **如果用户这一轮只是补充或修改了 1~N 个明确字段（例如“甲方公司名称改为软通智慧”），则本轮只能做“更新参数/内容 + 刷新右侧表格”，禁止立刻调用合同渲染；但回复末尾应补一条极简提示，询问用户是否要基于当前内容直接生成合同。**
 
 对话框展示要求：

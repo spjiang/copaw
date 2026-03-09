@@ -7,11 +7,12 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import time
 import uuid
-from urllib.parse import urlparse
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 try:
     import requests
@@ -27,13 +28,46 @@ from event_meta import SKILL_LABEL, SKILL_NAME, get_event_name
 from push import push
 from redis_push import push_end, push_error, push_start
 from runtime_context import resolve_session_id, resolve_user_id
+from smart_create_utils import get_file_url_from_smart_create_response
 
 RENDER_API = os.environ.get("TEMPLATE_RENDER_API", "http://10.17.55.121:8012/render")
+FREE_DRAFT_SAVE_API = os.environ.get(
+    "FREE_DRAFT_SAVE_API",
+    "http://10.17.96.197:8088/api/contracts/smart-create",
+)
 
 
 def _looks_like_docx_url(value: str) -> bool:
     path = urlparse(value).path.lower()
     return path.endswith(".docx")
+
+
+def _upload_to_contract_system(docx_path: Path, user_id: str) -> str | None:
+    """Upload docx to contract management system via smart-create API. Returns url or None."""
+    with docx_path.open("rb") as fp:
+        response = requests.post(
+            FREE_DRAFT_SAVE_API,
+            data={
+                "user_id": user_id,
+                "use_ai": "true",
+                "corrections": "{}",
+            },
+            files={
+                "file": (
+                    docx_path.name,
+                    fp,
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            },
+            timeout=120,
+        )
+    if not response.ok:
+        return None
+    try:
+        payload = response.json()
+        return get_file_url_from_smart_create_response(payload)
+    except Exception:
+        return None
 
 
 def _load_params_text(params_file: Path) -> tuple[str, dict[str, Any]]:
@@ -121,18 +155,41 @@ def main():
         if not payload.get("success"):
             raise RuntimeError(payload.get("message") or "render api returned success=false")
 
+        render_url = payload.get("url", "")
+        result_url = render_url
+        cms_url = None
+        try:
+            resp = requests.get(render_url, timeout=60)
+            if resp.ok:
+                with tempfile.NamedTemporaryFile(
+                    suffix=".docx", delete=False
+                ) as tmp:
+                    tmp.write(resp.content)
+                    tmp_path = Path(tmp.name)
+                try:
+                    # 上传至合同管理系统，用于合同管理
+                    cms_url = _upload_to_contract_system(tmp_path, user_id)
+                    if cms_url:
+                        result_url = cms_url
+                finally:
+                    tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
         runtime_ms = int((time.time() - start_time) * 1000)
         result = {
             "template_url": template_url,
-            "render_result_url": payload.get("url", ""),
-            "result_url": payload.get("url", ""),
-            "file_url": payload.get("url", ""),
+            "render_result_url": render_url,
+            "result_url": result_url,
+            "file_url": result_url,
             "message": payload.get("message", "ok"),
             "params_json": params_json,
             "render_mode": "final",
             "generation_mode": "template_render",
             "result_type": "docx",
         }
+        if cms_url:
+            result["cms_url"] = cms_url
         push_end(
             session_id=session_id,
             user_id=user_id,
