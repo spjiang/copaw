@@ -16,15 +16,17 @@ import {
 import {
   FileTextOutlined,
   LoadingOutlined,
+  SendOutlined,
 } from "@ant-design/icons";
-import { getApiUrl } from "../../../api/config";
+import { getApiUrl, getApiToken } from "../../../api/config";
 import { normalizeSkillEvent, SkillEvent } from "../skillEvent";
 
-const { Text, Paragraph } = Typography;
+const { Text } = Typography;
 
 interface ParamTableRow {
   path: string;
   field_name?: string;
+  param_display?: string;
   group?: string;
   desc?: string;
   required?: boolean;
@@ -50,6 +52,9 @@ interface UpdateContext {
   execId: string;
   userId: string;
 }
+
+const DEFAULT_SEND_PROMPT =
+  "请根据已上传的附件和项目背景，继续补充当前合同模板的缺失参数。请将建议值回填到参数中，我会在右侧表格中确认或修改。";
 
 interface Props {
   sessionId: string;
@@ -97,6 +102,8 @@ export default function ContractParamsPanel({ sessionId }: Props) {
   const [context, setContext] = useState<UpdateContext | null>(null);
   const [draftValues, setDraftValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [sendingToChat, setSendingToChat] = useState(false);
+  const [sendPromptText, setSendPromptText] = useState(DEFAULT_SEND_PROMPT);
   const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
@@ -225,6 +232,54 @@ export default function ContractParamsPanel({ sessionId }: Props) {
     }
   };
 
+  const handleSendToChat = async () => {
+    if (!sessionId) {
+      message.error("未获取会话ID，请先发送一条消息");
+      return;
+    }
+    const text = sendPromptText.trim();
+    if (!text) {
+      message.warning("请输入要发送的内容");
+      return;
+    }
+
+    setSendingToChat(true);
+    try {
+      const userId = (typeof window !== "undefined" && (window as any).currentUserId) || "default";
+      const channel = (typeof window !== "undefined" && (window as any).currentChannel) || "console";
+      const body = {
+        input: [
+          {
+            role: "user",
+            content: [{ type: "text", text, status: "created" }],
+          },
+        ],
+        session_id: sessionId,
+        user_id: userId,
+        channel,
+        stream: true,
+      };
+      const token = getApiToken();
+      const res = await fetch(getApiUrl("/agent/process"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(err || "请求失败");
+      }
+      message.success("已发送到对话框，大模型将补充参数并更新表格");
+    } catch (e) {
+      message.error((e as Error)?.message || "发送失败");
+    } finally {
+      setSendingToChat(false);
+    }
+  };
+
   return (
     <div
       style={{
@@ -277,6 +332,29 @@ export default function ContractParamsPanel({ sessionId }: Props) {
               message="批量填写说明"
               description="直接在“当前值”列中修改多个参数，点击“提交批量更新”即可。留空表示清空当前值。"
             />
+            <Card size="small" title="让大模型继续提参" styles={{ body: { padding: 12 } }}>
+              <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                <Input.TextArea
+                  value={sendPromptText}
+                  onChange={(e) => setSendPromptText(e.target.value)}
+                  placeholder="输入提示词，让大模型根据附件/背景补充参数…"
+                  autoSize={{ minRows: 2, maxRows: 4 }}
+                  disabled={sendingToChat}
+                />
+                <Button
+                  type="primary"
+                  icon={<SendOutlined />}
+                  loading={sendingToChat}
+                  onClick={handleSendToChat}
+                  disabled={!sessionId}
+                >
+                  发送到对话框
+                </Button>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  发送后大模型会处理请求并回填参数，表格将自动刷新
+                </Text>
+              </Space>
+            </Card>
             <Card size="small" styles={{ body: { padding: 12 } }}>
               <Space wrap size={[8, 8]}>
                 <Tag color="blue">总参数 {summary.total_fields || rows.length}</Tag>
@@ -301,9 +379,32 @@ export default function ContractParamsPanel({ sessionId }: Props) {
                 </Button>
               </Space>
               {Array.isArray(summary.missing_fields) && summary.missing_fields.length > 0 && (
-                <Paragraph style={{ marginTop: 10, marginBottom: 0 }}>
-                  <Text strong>当前仍缺少：</Text> {summary.missing_fields.join("、")}
-                </Paragraph>
+                <div style={{ marginTop: 10 }}>
+                  <Text strong>当前仍缺少：</Text>
+                  <Table
+                    size="small"
+                    dataSource={rows.filter((r) => r.status === "missing")}
+                    rowKey={(r) => r.path}
+                    pagination={false}
+                    scroll={{ y: 200 }}
+                    style={{ marginTop: 6 }}
+                    columns={[
+                      {
+                        title: "序号",
+                        key: "idx",
+                        width: 50,
+                        render: (_: unknown, __: ParamTableRow, idx: number) => idx + 1,
+                      },
+                      {
+                        title: "参数",
+                        dataIndex: "param_display",
+                        key: "param_display",
+                        render: (_: string | undefined, record: ParamTableRow) =>
+                          record.param_display || record.desc || record.field_name || record.path,
+                      },
+                    ]}
+                  />
+                </div>
               )}
             </Card>
 
@@ -322,16 +423,16 @@ export default function ContractParamsPanel({ sessionId }: Props) {
                 dataSource={rows}
                 pagination={false}
                 size="small"
-                scroll={{ x: 720, y: 520 }}
+                scroll={{ x: 560, y: 520 }}
                 columns={[
                   {
-                    title: "参数名称",
-                    dataIndex: "field_name",
-                    key: "field_name",
-                    width: 130,
+                    title: "参数",
+                    dataIndex: "param_display",
+                    key: "param_display",
+                    width: 180,
                     render: (_, record) => (
                       <Space direction="vertical" size={0}>
-                        <Text strong>{record.field_name || record.path}</Text>
+                        <Text strong>{record.param_display || record.desc || record.field_name || record.path}</Text>
                         {record.group && (
                           <Text type="secondary" style={{ fontSize: 11 }}>
                             分组：{record.group}
@@ -339,13 +440,6 @@ export default function ContractParamsPanel({ sessionId }: Props) {
                         )}
                       </Space>
                     ),
-                  },
-                  {
-                    title: "填写说明",
-                    dataIndex: "desc",
-                    key: "desc",
-                    width: 220,
-                    render: (value: string | undefined) => value || <Text type="secondary">未提供说明</Text>,
                   },
                   {
                     title: "当前值",

@@ -184,6 +184,45 @@ def parse_json_text(value: Any) -> Any:
     return value
 
 
+def count_param_schema_fields(schema: Any) -> int:
+    """Count leaf parameter nodes from param_schema_json."""
+    count = 0
+
+    def _walk(node: Any) -> None:
+        nonlocal count
+        if isinstance(node, dict):
+            if isinstance(node.get("params"), list):
+                for item in node["params"]:
+                    _walk(item)
+                return
+            if "value" in node:
+                value = node.get("value")
+                if isinstance(value, dict):
+                    for child in value.values():
+                        _walk(child)
+                    return
+                if isinstance(value, list):
+                    nested = False
+                    for item in value:
+                        if isinstance(item, (dict, list)):
+                            nested = True
+                            _walk(item)
+                    if not nested:
+                        count += 1
+                    return
+                count += 1
+                return
+            for child in node.values():
+                _walk(child)
+            return
+        if isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    _walk(schema)
+    return count
+
+
 def _normalize_api_template(row: dict[str, Any]) -> dict[str, Any]:
     title = row.get("title") or row.get("template_name") or row.get("name") or ""
     file_path = row.get("file_path") or row.get("template_path") or row.get("path") or ""
@@ -196,6 +235,7 @@ def _normalize_api_template(row: dict[str, Any]) -> dict[str, Any]:
     sub_tags = parse_json_text(row.get("sub_tags"))
     sub_type = row.get("sub_type") or (sub_tags[0] if isinstance(sub_tags, list) and sub_tags else "")
     param_schema_json = parse_param_schema_json(row.get("param_schema_json"))
+    param_count = count_param_schema_fields(param_schema_json)
     return {
         "template_id": template_id,
         "title": title,
@@ -206,7 +246,9 @@ def _normalize_api_template(row: dict[str, Any]) -> dict[str, Any]:
         "sub_tags": sub_tags,
         "version": row.get("version") or "",
         "usage_count": row.get("usage_count"),
-        "variables_count": row.get("variables_count"),
+        # 参数数量统一以 param_schema_json 实际参数叶子节点统计为准
+        "variables_count": param_count,
+        "param_count": param_count,
         "status": row.get("status") or "",
         "starred": row.get("starred"),
         "file_id": row.get("file_id"),

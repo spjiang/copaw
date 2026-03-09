@@ -164,14 +164,19 @@ def _collect_table_rows(schema) -> list[dict]:
 def _build_param_table(field_rows: list[dict], missing_fields: list[str]) -> dict:
     filled_count = sum(1 for row in field_rows if row.get("status") == "filled")
     missing_count = sum(1 for row in field_rows if row.get("status") == "missing")
+    rows = []
+    for row in field_rows:
+        desc = (row.get("desc") or "").strip()
+        fn = (row.get("field_name") or row.get("path") or "").strip()
+        param_display = desc if desc else (fn or "-")
+        rows.append({**row, "param_display": param_display})
     return {
         "columns": [
-            {"key": "field_name", "title": "参数名称"},
-            {"key": "desc", "title": "填写说明"},
+            {"key": "param_display", "title": "参数"},
             {"key": "display_value", "title": "当前值"},
             {"key": "status", "title": "状态"},
         ],
-        "rows": field_rows,
+        "rows": rows,
         "summary": {
             "total_fields": len(field_rows),
             "filled_fields": filled_count,
@@ -205,27 +210,41 @@ def _build_param_table_markdown(field_rows: list[dict], summary: dict) -> str:
     missing_fields = summary.get("missing_fields") or []
 
     lines = [
-        f"当前合同模板参数进度：已填写 **{filled_fields}** / **{total_fields}**，待补充 **{missing_count}** 项。",
+        f"已填写 **{filled_fields}** / **{total_fields}** 项，待补 **{missing_count}** 项。",
         "",
-        "| 参数名称 | 填写说明 | 当前值 | 状态 |",
-        "| --- | --- | --- | --- |",
+        "| 参数 | 当前值 | 状态 |",
+        "| --- | --- | --- |",
     ]
 
     for row in field_rows:
-        field_name = _markdown_cell(row.get("field_name") or row.get("path") or "-") or "-"
-        desc = _markdown_cell(row.get("desc") or "未提供说明") or "未提供说明"
+        desc = _markdown_cell(row.get("desc") or "") or ""
+        field_name = _markdown_cell(row.get("field_name") or row.get("path") or "") or ""
+        # 优先使用中文 desc，避免向用户暴露英文参数 key
+        display_name = desc if desc else (field_name or "-")
         display_value = _markdown_cell(row.get("display_value") or "未填写") or "未填写"
         status = _row_status_label(row)
-        lines.append(f"| {field_name} | {desc} | {display_value} | {status} |")
+        lines.append(f"| {display_name} | {display_value} | {status} |")
 
     if missing_fields:
-        lines.extend(
-            [
-                "",
-                "当前仍缺少：",
-                "、".join(str(item) for item in missing_fields if str(item).strip()),
-            ]
-        )
+        path_to_desc = {}
+        for row in field_rows:
+            d = (row.get("desc") or "").strip()
+            if not d:
+                continue
+            for k in (row.get("path"), row.get("field_name")):
+                if k:
+                    path_to_desc[k] = d
+            p = row.get("path") or ""
+            if "." in p:
+                path_to_desc[p.split(".")[-1]] = d
+        display_missing = []
+        for m in missing_fields:
+            m = str(m).strip()
+            if not m:
+                continue
+            display_missing.append(path_to_desc.get(m) or path_to_desc.get(m.split(".")[-1] if "." in m else m) or m)
+        if display_missing:
+            lines.extend(["", "当前仍缺少：", "、".join(display_missing)])
 
     return "\n".join(lines)
 

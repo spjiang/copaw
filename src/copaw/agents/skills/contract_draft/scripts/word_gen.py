@@ -119,7 +119,7 @@ def main():
         sys.exit(1)
 
     output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else (
-        Path(os.environ.get("CONTRACT_STORAGE_DIR", str(Path.home() / ".copaw" / "contracts"))) / "drafts"
+        Path(os.environ.get("CONTRACT_STORAGE_DIR", str(Path.home() / ".copaw" / "contracts"))).expanduser() / "drafts"
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -190,7 +190,7 @@ def main():
     file_size = output_path.stat().st_size
     copaw_api = os.environ.get("COPAW_API_BASE", "http://127.0.0.1:8088")
     try:
-        storage_base = Path(os.environ.get("CONTRACT_STORAGE_DIR", str(Path.home() / ".copaw" / "contracts")))
+        storage_base = Path(os.environ.get("CONTRACT_STORAGE_DIR", str(Path.home() / ".copaw" / "contracts"))).expanduser()
         rel = output_path.relative_to(storage_base.parent)
         file_url = f"{copaw_api}/files/{rel}"
     except ValueError:

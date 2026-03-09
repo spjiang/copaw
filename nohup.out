@@ -1,0 +1,74 @@
+Traceback (most recent call last):
+  File "/Users/jiangshengping/miniconda3/bin/copaw", line 5, in <module>
+    from copaw.cli.main import cli
+  File "/Users/jiangshengping/wwwroot/rtzh/wwwroot/CoPaw/src/copaw/cli/main.py", line 45, in <module>
+    from .channels_cmd import channels_group  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jiangshengping/wwwroot/rtzh/wwwroot/CoPaw/src/copaw/cli/channels_cmd.py", line 26, in <module>
+    from ..app.channels.registry import (
+  File "/Users/jiangshengping/wwwroot/rtzh/wwwroot/CoPaw/src/copaw/app/channels/registry.py", line 15, in <module>
+    from .feishu import FeishuChannel
+  File "/Users/jiangshengping/wwwroot/rtzh/wwwroot/CoPaw/src/copaw/app/channels/feishu/__init__.py", line 3, in <module>
+    from .channel import FeishuChannel
+  File "/Users/jiangshengping/wwwroot/rtzh/wwwroot/CoPaw/src/copaw/app/channels/feishu/channel.py", line 28, in <module>
+    import lark_oapi as lark
+  File "/Users/jiangshengping/miniconda3/lib/python3.11/site-packages/lark_oapi/__init__.py", line 1, in <module>
+    from . import ws
+  File "/Users/jiangshengping/miniconda3/lib/python3.11/site-packages/lark_oapi/ws/__init__.py", line 1, in <module>
+    from .client import Client
+  File "/Users/jiangshengping/miniconda3/lib/python3.11/site-packages/lark_oapi/ws/client.py", line 17, in <module>
+    from lark_oapi.event.dispatcher_handler import EventDispatcherHandler
+  File "/Users/jiangshengping/miniconda3/lib/python3.11/site-packages/lark_oapi/event/dispatcher_handler.py", line 6, in <module>
+    from lark_oapi.api.acs.v1.processor import *
+  File "/Users/jiangshengping/miniconda3/lib/python3.11/site-packages/lark_oapi/api/__init__.py", line 15, in <module>
+    from . import corehr
+  File "/Users/jiangshengping/miniconda3/lib/python3.11/site-packages/lark_oapi/api/corehr/__init__.py", line 1, in <module>
+    from . import v1
+  File "/Users/jiangshengping/miniconda3/lib/python3.11/site-packages/lark_oapi/api/corehr/v1/__init__.py", line 1, in <module>
+    from .model import *
+  File "/Users/jiangshengping/miniconda3/lib/python3.11/site-packages/lark_oapi/api/corehr/v1/model/__init__.py", line 437, in <module>
+    from .patch_person_response import *
+  File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 936, in exec_module
+  File "<frozen importlib._bootstrap_external>", line 1032, in get_code
+  File "<frozen importlib._bootstrap_external>", line 1130, in get_data
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/Users/jiangshengping/miniconda3/bin/copaw", line 5, in <module>
+    from copaw.cli.main import cli
+  File "/Users/jiangshengping/wwwroot/rtzh/wwwroot/CoPaw/src/copaw/cli/main.py", line 45, in <module>
+    from .channels_cmd import channels_group  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jiangshengping/wwwroot/rtzh/wwwroot/CoPaw/src/copaw/cli/channels_cmd.py", line 26, in <module>
+    from ..app.channels.registry import (
+  File "/Users/jiangshengping/wwwroot/rtzh/wwwroot/CoPaw/src/copaw/app/channels/registry.py", line 15, in <module>
+    from .feishu import FeishuChannel
+  File "/Users/jiangshengping/wwwroot/rtzh/wwwroot/CoPaw/src/copaw/app/channels/feishu/__init__.py", line 3, in <module>
+    from .channel import FeishuChannel
+  File "/Users/jiangshengping/wwwroot/rtzh/wwwroot/CoPaw/src/copaw/app/channels/feishu/channel.py", line 28, in <module>
+    import lark_oapi as lark
+  File "/Users/jiangshengping/miniconda3/lib/python3.11/site-packages/lark_oapi/__init__.py", line 1, in <module>
+    from . import ws
+  File "/Users/jiangshengping/miniconda3/lib/python3.11/site-packages/lark_oapi/ws/__init__.py", line 1, in <module>
+    from .client import Client
+  File "/Users/jiangshengping/miniconda3/lib/python3.11/site-packages/lark_oapi/ws/client.py", line 17, in <module>
+    from lark_oapi.event.dispatcher_handler import EventDispatcherHandler
+  File "/Users/jiangshengping/miniconda3/lib/python3.11/site-packages/lark_oapi/event/dispatcher_handler.py", line 6, in <module>
+    from lark_oapi.api.acs.v1.processor import *
+  File "/Users/jiangshengping/miniconda3/lib/python3.11/site-packages/lark_oapi/api/__init__.py", line 17, in <module>
+    from . import directory
+  File "/Users/jiangshengping/miniconda3/lib/python3.11/site-packages/lark_oapi/api/directory/__init__.py", line 1, in <module>
+    from . import v1
+  File "/Users/jiangshengping/miniconda3/lib/python3.11/site-packages/lark_oapi/api/directory/v1/__init__.py", line 1, in <module>
+    from .model import *
+  File "/Users/jiangshengping/miniconda3/lib/python3.11/site-packages/lark_oapi/api/directory/v1/model/__init__.py", line 181, in <module>
+    from .create_collaboration_rule_request_body import *
+  File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 936, in exec_module
+  File "<frozen importlib._bootstrap_external>", line 1032, in get_code
+  File "<frozen importlib._bootstrap_external>", line 1131, in get_data
+KeyboardInterrupt

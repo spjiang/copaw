@@ -7,10 +7,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-import tempfile
 import time
-import urllib.parse
-import urllib.request
 import uuid
 from pathlib import Path
 
@@ -22,104 +19,22 @@ sys.path.insert(0, str(_SKILLS_DIR))
 from event_meta import SKILL_LABEL, SKILL_NAME, get_event_name
 from push import push
 from redis_push import push_end, push_error, push_running, push_start
+from attachment_utils import (
+    SUPPORTED_EXTS,
+    download_to_temp,
+    extract_text,
+    is_http_url,
+    resolve_file_refs,
+)
 from runtime_context import resolve_input_file_urls, resolve_session_id, resolve_user_id
 from search_common import extract_keywords, infer_contract_type, search_templates
-
-SUPPORTED_EXTS = {".docx", ".doc", ".pdf", ".txt", ".md", ".wps"}
-
-
-def extract_text(file_path: str) -> str:
-    path = Path(file_path)
-    ext = path.suffix.lower()
-
-    if ext == ".docx":
-        from docx import Document
-
-        doc = Document(file_path)
-        blocks = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    text = cell.text.strip()
-                    if text:
-                        blocks.append(text)
-        return "\n".join(blocks)
-
-    if ext == ".doc":
-        try:
-            import subprocess
-
-            result = subprocess.run(
-                ["textutil", "-convert", "txt", "-stdout", file_path],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip()
-        except Exception:
-            pass
-        return path.stem
-
-    if ext == ".pdf":
-        import pdfplumber
-
-        with pdfplumber.open(file_path) as pdf:
-            return "\n".join(page.extract_text() or "" for page in pdf.pages)
-
-    if ext in {".txt", ".md"}:
-        return path.read_text(encoding="utf-8", errors="ignore")
-
-    return path.stem
-
-
-def _is_http_url(value: str) -> bool:
-    parsed = urllib.parse.urlparse(value)
-    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
-
-
-def _download_to_temp(url: str) -> str:
-    filename = urllib.parse.unquote(urllib.parse.urlparse(url).path.split("/")[-1]) or "upload.docx"
-    tmp_dir = tempfile.mkdtemp(prefix="copaw_upload_")
-    target = os.path.join(tmp_dir, filename)
-    request = urllib.request.Request(url, headers={"User-Agent": "copaw-skill/1.0"})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        with open(target, "wb") as f:
-            f.write(response.read())
-    return target
-
 
 def _pick_file_input(argv_file_input: str) -> str:
     raw = resolve_input_file_urls(argv_file_input)
     if not raw:
         return argv_file_input
-
-    def _extract(item) -> str:
-        if isinstance(item, str):
-            return item.strip()
-        if isinstance(item, dict):
-            for key in ("url", "file_url", "path", "file_path"):
-                value = item.get(key)
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
-        return ""
-
-    try:
-        parsed = json.loads(raw)
-    except Exception:
-        parsed = None
-
-    if isinstance(parsed, list):
-        refs = [_extract(item) for item in parsed]
-        refs = [r for r in refs if r]
-        return refs[-1] if refs else argv_file_input
-    if isinstance(parsed, dict):
-        return _extract(parsed) or argv_file_input
-    if isinstance(parsed, str) and parsed.strip():
-        return parsed.strip()
-
-    parts = [p.strip() for p in raw.split(",") if p.strip()]
-    return (parts[-1] if parts else "") or argv_file_input
+    refs = resolve_file_refs(raw)
+    return refs[-1] if refs else argv_file_input
 
 
 def main():
@@ -149,8 +64,8 @@ def main():
     )
 
     try:
-        if _is_http_url(file_input):
-            temp_file = _download_to_temp(file_input)
+        if is_http_url(file_input):
+            temp_file = download_to_temp(file_input)
             file_path = temp_file
         else:
             file_path = file_input

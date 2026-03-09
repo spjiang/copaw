@@ -2,7 +2,7 @@ import {
   AgentScopeRuntimeWebUI,
   IAgentScopeRuntimeWebUIOptions,
 } from "@agentscope-ai/chat";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Modal, Button, Result, Tooltip } from "antd";
 import {
   ExclamationCircleOutlined,
@@ -32,6 +32,56 @@ declare const window: CustomWindow;
 
 type OptionsConfig = DefaultConfig;
 
+const MIN_PANEL_WIDTH = 280;
+const MAX_PANEL_WIDTH = 720;
+
+function ResizeHandle({
+  onResize,
+  onResizeEnd,
+}: {
+  onResize: (delta: number) => void;
+  onResizeEnd: () => void;
+}) {
+  const startX = useRef(0);
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      startX.current = e.clientX;
+      const onMouseMove = (move: MouseEvent) => {
+        onResize(startX.current - move.clientX);
+        startX.current = move.clientX;
+      };
+      const onMouseUp = () => {
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        onResizeEnd();
+      };
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+    },
+    [onResize, onResizeEnd]
+  );
+  return (
+    <div
+      onMouseDown={handleMouseDown}
+      role="separator"
+      aria-orientation="vertical"
+      title="拖动调整宽度"
+      style={{
+        width: 6,
+        flexShrink: 0,
+        cursor: "col-resize",
+        background: "#f0f0f0",
+        borderLeft: "1px solid #e8e8e8",
+      }}
+    />
+  );
+}
+
 export default function ChatPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -44,7 +94,17 @@ export default function ChatPage() {
     "redis-debug-panel-visible",
     { defaultValue: false },
   );
+  const [contractParamsWidth, setContractParamsWidth] = useLocalStorageState<number>(
+    "contract-params-panel-width",
+    { defaultValue: 420 },
+  );
+  const [debugPanelWidth, setDebugPanelWidth] = useLocalStorageState<number>(
+    "redis-debug-panel-width",
+    { defaultValue: 360 },
+  );
   const [debugSessionId, setDebugSessionId] = useState<string>("");
+
+  const clampWidth = useCallback((w: number) => Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, w)), []);
 
   // Keep debug panel session in sync even before sending message.
   useEffect(() => {
@@ -163,8 +223,8 @@ export default function ChatPage() {
         // useAttachments only renders the upload button when customRequest is provided
         attachments: {
           accept: ".pdf,.docx,.doc,.xlsx,.xls,.csv,.txt,.md,.png,.jpg,.jpeg,.gif,.webp",
-          multiple: false,
-          maxCount: 3,
+          multiple: true,
+          maxCount: 10,
           customRequest: async (options: any) => {
             const { file, onSuccess, onError, onProgress } = options;
             const formData = new FormData();
@@ -205,8 +265,8 @@ export default function ChatPage() {
   }, [optionsConfig]);
 
   const sidePanelOffset =
-    (showContractParamsPanel ? 420 : 0) +
-    (showDebugPanel ? 360 : 0) +
+    (showContractParamsPanel ? contractParamsWidth + 6 : 0) +
+    (showDebugPanel ? debugPanelWidth + 6 : 0) +
     4;
 
   return (
@@ -250,34 +310,54 @@ export default function ChatPage() {
         />
       </Tooltip>
 
-      {/* Contract params panel */}
+      {/* Contract params panel with resize handle */}
       {showContractParamsPanel && (
-        <div
-          style={{
-            width: 420,
-            height: "100%",
-            flexShrink: 0,
-            borderLeft: "1px solid #e8e8e8",
-            background: "#fafafa",
-          }}
-        >
-          <ContractParamsPanel sessionId={debugSessionId} />
-        </div>
+        <>
+          <ResizeHandle
+            onResize={(delta) =>
+              setContractParamsWidth((prev) => clampWidth((prev ?? 420) + delta))
+            }
+            onResizeEnd={() => {}}
+          />
+          <div
+            style={{
+              width: contractParamsWidth,
+              minWidth: MIN_PANEL_WIDTH,
+              maxWidth: MAX_PANEL_WIDTH,
+              height: "100%",
+              flexShrink: 0,
+              borderLeft: "1px solid #e8e8e8",
+              background: "#fafafa",
+            }}
+          >
+            <ContractParamsPanel sessionId={debugSessionId} />
+          </div>
+        </>
       )}
 
-      {/* Redis debug panel */}
+      {/* Redis debug panel with resize handle */}
       {showDebugPanel && (
-        <div
-          style={{
-            width: 360,
-            height: "100%",
-            flexShrink: 0,
-            borderLeft: "1px solid #e8e8e8",
-            background: "#f5f5f5",
-          }}
-        >
-          <RedisDebugPanel sessionId={debugSessionId} />
-        </div>
+        <>
+          <ResizeHandle
+            onResize={(delta) =>
+              setDebugPanelWidth((prev) => clampWidth((prev ?? 360) + delta))
+            }
+            onResizeEnd={() => {}}
+          />
+          <div
+            style={{
+              width: debugPanelWidth,
+              minWidth: MIN_PANEL_WIDTH,
+              maxWidth: MAX_PANEL_WIDTH,
+              height: "100%",
+              flexShrink: 0,
+              borderLeft: "1px solid #e8e8e8",
+              background: "#f5f5f5",
+            }}
+          >
+            <RedisDebugPanel sessionId={debugSessionId} />
+          </div>
+        </>
       )}
 
       <Modal open={showModelPrompt} closable={false} footer={null} width={480}>

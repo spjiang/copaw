@@ -9,6 +9,7 @@ import os
 import sys
 import time
 import uuid
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import Any
 
@@ -30,29 +31,12 @@ from runtime_context import resolve_session_id, resolve_user_id
 RENDER_API = os.environ.get("TEMPLATE_RENDER_API", "http://10.17.55.121:8012/render")
 
 
-def _is_schema_dict_format(obj: Any) -> bool:
-    if not isinstance(obj, dict):
-        return False
-    if "params" in obj or "template_id" in obj or "template_url" in obj:
-        return False
-    return any(isinstance(v, dict) and ("desc" in v or "value" in v) for v in obj.values())
+def _looks_like_docx_url(value: str) -> bool:
+    path = urlparse(value).path.lower()
+    return path.endswith(".docx")
 
 
-def _schema_dict_to_flat(schema: dict) -> dict:
-    flat: dict = {}
-    for key, meta in schema.items():
-        if not isinstance(meta, dict):
-            continue
-        value = meta.get("value")
-        if isinstance(value, list):
-            if value:
-                flat[key] = value
-        elif value not in (None, ""):
-            flat[key] = value
-    return flat
-
-
-def _load_params_text(params_file: Path) -> tuple[str, dict]:
+def _load_params_text(params_file: Path) -> tuple[str, dict[str, Any]]:
     raw = params_file.read_text(encoding="utf-8").strip()
     if raw.startswith("```"):
         raw = "\n".join(line for line in raw.splitlines() if not line.strip().startswith("```")).strip()
@@ -61,38 +45,11 @@ def _load_params_text(params_file: Path) -> tuple[str, dict]:
     if not isinstance(data, dict):
         raise ValueError(f"params file must contain a JSON object, got: {type(data)}")
 
-    if _is_schema_dict_format(data):
-        flat = _schema_dict_to_flat(data)
-        return json.dumps(flat, ensure_ascii=False), data
-
     schema = data.get("param_schema_json")
-    if _is_schema_dict_format(schema):
-        flat = _schema_dict_to_flat(schema)
-        return json.dumps(flat, ensure_ascii=False), data
-
-    if isinstance(schema, dict) and isinstance(schema.get("params"), list):
-        flat = {}
-        for item in schema["params"]:
-            if not isinstance(item, dict):
-                continue
-            key = item.get("field_name") or item.get("label")
-            value = item.get("value")
-            if key and value not in (None, ""):
-                flat[str(key)] = value
-        return json.dumps(flat, ensure_ascii=False), data
-
-    if isinstance(data.get("params"), list):
-        flat = {}
-        for item in data["params"]:
-            if not isinstance(item, dict):
-                continue
-            key = item.get("field_name") or item.get("label")
-            value = item.get("value")
-            if key and value not in (None, ""):
-                flat[str(key)] = value
-        return json.dumps(flat, ensure_ascii=False), data
-
-    return json.dumps(data, ensure_ascii=False), data
+    render_context = schema if isinstance(schema, dict) else data
+    if not isinstance(render_context, dict):
+        raise ValueError("render context must be a JSON object")
+    return json.dumps(render_context, ensure_ascii=False), render_context
 
 
 def main():
@@ -146,6 +103,8 @@ def main():
     try:
         if not template_url.strip():
             raise RuntimeError("template_url is empty")
+        if not _looks_like_docx_url(template_url):
+            raise RuntimeError("template_url must be a .docx download url")
         if not params_file.exists():
             raise RuntimeError(f"params file not found: {params_file}")
 
@@ -166,10 +125,16 @@ def main():
         response = requests.post(
             RENDER_API,
             json={"template_url": template_url, "text": params_text},
-            timeout=60,
+            timeout=120,
         )
-        response.raise_for_status()
-        payload = response.json()
+        if not response.ok:
+            raise RuntimeError(
+                f"render api http {response.status_code}: {(response.text or '').strip()[:500]}"
+            )
+        try:
+            payload = response.json()
+        except Exception as exc:
+            raise RuntimeError(f"render api returned non-json response: {response.text[:500]}") from exc
         if not payload.get("success"):
             raise RuntimeError(payload.get("message") or "render api returned success=false")
 
@@ -212,7 +177,7 @@ def main():
         push(
             session_id,
             user_id,
-            "✅ 模板预览渲染成功" if is_preview else "✅ 模板渲染成功",
+            "✅ 模板预览生成成功" if is_preview else "✅ 模板生成成功",
             msg_type="result",
         )
         print(json.dumps({"success": True, **result}, ensure_ascii=False))
@@ -236,7 +201,7 @@ def main():
             user_id=user_id,
             skill_name=SKILL_NAME,
             skill_label=SKILL_LABEL,
-            event_name="模板渲染异常",
+            event_name="模板生成异常",
             input_data=input_data,
             error_msg=str(exc),
             exec_id=exec_id,

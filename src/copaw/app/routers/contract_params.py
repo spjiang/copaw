@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import sys
 import tempfile
@@ -13,6 +12,13 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+from copaw.agents.skills.contract_draft.scripts.param_schema_ops import (
+    apply_updates,
+    dump_params_payload,
+    extract_schema,
+    load_params_payload,
+    replace_schema,
+)
 
 router = APIRouter(prefix="/contract-params", tags=["contract-params"])
 
@@ -28,15 +34,6 @@ class ContractParamsUpdateRequest(BaseModel):
     session_id: str = Field(default="", description="Current session id")
     user_id: str = Field(default="", description="Current user id")
     updates: list[ParamUpdateItem] = Field(default_factory=list)
-
-
-def _pick_field_name(node: dict[str, Any], fallback: str = "") -> str:
-    for key in ("field_name", "name", "label", "param_id", "key"):
-        value = node.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return fallback
-
 
 def _ensure_allowed_params_file(raw_path: str) -> Path:
     if not raw_path.strip():
@@ -54,106 +51,6 @@ def _ensure_allowed_params_file(raw_path: str) -> Path:
     if not resolved.exists():
         raise HTTPException(status_code=404, detail=f"params file not found: {resolved}")
     return resolved
-
-
-def _tokenize_path(path: str) -> list[str | int]:
-    tokens: list[str | int] = []
-    for name, index in re.findall(r"([^[.\]]+)|\[(\d+)\]", path):
-        if name:
-            tokens.append(name)
-        elif index:
-            tokens.append(int(index))
-    return tokens
-
-
-def _locate_field_node(node: Any, tokens: list[str | int]) -> dict[str, Any] | None:
-    if not tokens:
-        if isinstance(node, dict) and "value" in node:
-            return node
-        return None
-
-    token = tokens[0]
-    rest = tokens[1:]
-
-    if isinstance(token, str):
-        if isinstance(node, dict) and isinstance(node.get("params"), list):
-            for item in node["params"]:
-                if isinstance(item, dict) and _pick_field_name(item, "") == token:
-                    found = _locate_field_node(item, rest)
-                    if found is not None:
-                        return found
-
-        if isinstance(node, dict) and "value" in node and isinstance(node["value"], dict):
-            child = node["value"].get(token)
-            if child is not None:
-                found = _locate_field_node(child, rest)
-                if found is not None:
-                    return found
-
-        if isinstance(node, dict):
-            child = node.get(token)
-            if child is not None:
-                found = _locate_field_node(child, rest)
-                if found is not None:
-                    return found
-
-    if isinstance(token, int):
-        if isinstance(node, dict) and "value" in node and isinstance(node["value"], list):
-            if 0 <= token < len(node["value"]):
-                found = _locate_field_node(node["value"][token], rest)
-                if found is not None:
-                    return found
-        if isinstance(node, list) and 0 <= token < len(node):
-            return _locate_field_node(node[token], rest)
-
-    return None
-
-
-def _coerce_value(raw_value: str, original_value: Any) -> Any:
-    text = raw_value.strip()
-    if not text:
-        return "" if isinstance(original_value, str) else None
-
-    if isinstance(original_value, bool):
-        if text.lower() in {"true", "1", "yes", "y", "是"}:
-            return True
-        if text.lower() in {"false", "0", "no", "n", "否"}:
-            return False
-
-    if isinstance(original_value, int) and not isinstance(original_value, bool):
-        try:
-            return int(text)
-        except ValueError:
-            return text
-
-    if isinstance(original_value, float):
-        try:
-            return float(text)
-        except ValueError:
-            return text
-
-    if isinstance(original_value, (dict, list)) or text.startswith("{") or text.startswith("["):
-        try:
-            return json.loads(text)
-        except Exception:
-            return text
-
-    return text
-
-
-def _apply_updates(schema: Any, updates: list[ParamUpdateItem]) -> list[str]:
-    updated_paths: list[str] = []
-    for item in updates:
-        tokens = _tokenize_path(item.path)
-        if not tokens:
-            raise HTTPException(status_code=400, detail=f"invalid path: {item.path}")
-        target = _locate_field_node(schema, tokens)
-        if not isinstance(target, dict) or "value" not in target:
-            raise HTTPException(status_code=400, detail=f"path not found: {item.path}")
-        target["value"] = _coerce_value(item.value, target.get("value"))
-        updated_paths.append(item.path)
-    return updated_paths
-
 
 def _resolve_push_params_script() -> Path:
     active_script = (
@@ -226,24 +123,19 @@ async def update_contract_params(request: ContractParamsUpdateRequest) -> dict[s
     params_path = _ensure_allowed_params_file(request.params_file)
 
     try:
-        payload = json.loads(params_path.read_text(encoding="utf-8"))
+        payload = load_params_payload(params_path)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"invalid params json: {exc}") from exc
 
-    schema = payload.get("param_schema_json")
-    if schema is None:
-        schema = payload
+    schema = extract_schema(payload)
 
-    updated_paths = _apply_updates(schema, request.updates)
-    if isinstance(payload, dict) and "param_schema_json" in payload:
-        payload["param_schema_json"] = schema
-    else:
-        payload = schema
+    try:
+        updated_paths = apply_updates(schema, request.updates)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    params_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    payload = replace_schema(payload, schema)
+    dump_params_payload(params_path, payload)
 
     result = _run_push_params(
         _resolve_push_params_script(),
