@@ -59,6 +59,7 @@ metadata:
 - `user_input_text`
 - `selected_template_id`
 - `selected_template_url`
+- `selected_template_render_url`
 - `selected_template_params_schema`
 - `render_result_url`
 
@@ -280,8 +281,15 @@ execute_shell_command("python3 ~/.copaw/active_skills/contract_draft/scripts/pus
 
 - `selected_template_id`
 - `selected_template_url`
+- `selected_template_render_url`
 - `selected_template_params_schema`
 - `selected_template_file_path`
+
+字段用途约束：
+
+1. `selected_template_render_url`：用于调用渲染接口 `render_template.py`，来源必须是模板检索接口返回的 `file_path` 拼接结果
+2. `selected_template_url`：仅用于 Redis 事件推送展示，来源必须是模板检索接口返回的 `file_path_source` 拼接结果
+3. 禁止把 `selected_template_url`（source）直接用于渲染接口输入
 
 以上字段仅允许用于后台记录、后续脚本调用和 Redis 事件推送，**禁止在聊天窗口原样输出**。用户侧只允许看到类似：
 
@@ -670,12 +678,12 @@ Step 8 关键判定补充：
 可通过内部渲染脚本统一转调模板系统 API：
 
 ```bash
-execute_shell_command("python3 ~/.copaw/active_skills/contract_draft/scripts/render_template.py '{selected_template_url}' /tmp/copaw_params_{exec_id}.json {exec_id} {session_id} {user_id}")
+execute_shell_command("python3 ~/.copaw/active_skills/contract_draft/scripts/render_template.py '{selected_template_render_url}' /tmp/copaw_params_{exec_id}.json {exec_id} {session_id} {user_id}")
 ```
 
 该脚本当前对应的是模板系统合同生成接口，输入前提必须满足：
 
-1. `selected_template_url` 已存在，且是模板系统返回的 `.docx` 模板地址
+1. `selected_template_render_url` 已存在，且是基于模板检索接口 `file_path` 拼接得到的 `.docx` 模板地址
 2. 参数文件 `/tmp/copaw_params_{exec_id}.json` 已完成整理
 3. 本次生成目标是“基于已匹配模板渲染合同”，而不是自由起草
 4. **模板生成成功链路只允许推送一条开始事件和一条结束事件**：开始统一使用 `template_render_started`，结束统一使用 `template_render_finished`；不要再额外推送 `template_render_prepare`、`template_render_success` 或其他同阶段重复事件
