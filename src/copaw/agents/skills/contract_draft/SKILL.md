@@ -251,7 +251,7 @@ execute_shell_command("python3 ~/.copaw/active_skills/contract_draft/scripts/pus
 - 模板名称 `title`
 - 模板描述 `description`
 - 分类 `category`
-- 模型版本 `version`
+- 版本 `version`
 - 参数数量：必须基于该模板 `param_schema_json` 的实际参数个数（叶子字段数）展示，禁止直接使用其他来源的估算值
 
 推荐回复格式：
