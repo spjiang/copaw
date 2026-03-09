@@ -311,6 +311,13 @@ execute_shell_command("python3 ~/.copaw/active_skills/contract_draft/scripts/pus
 execute_shell_command("python3 ~/.copaw/active_skills/contract_draft/scripts/push_event.py contract_draft running {exec_id} template_selected '' '{\"selected_template_id\":\"{selected_template_id}\"}' '{\"selected_template_url\":\"{selected_template_url}\"}' {session_id} {user_id} '' '' '合同起草智能体' '已确认模板'")
 ```
 
+**对外回复硬约束（Step 6）**：
+
+1. 聊天窗口禁止出现“用户选择了模板X”“现在我要记录模板信息并推送模板选择事件”“根据 match_by_file.py 返回结果，我需要提取以下信息”等内部过程描述
+2. 聊天窗口禁止列出 `selected_template_id`、`selected_template_url`、`selected_template_render_url`、`selected_template_params_schema` 的键值或 JSON 片段
+3. 用户确认模板后，本轮仅允许业务语义回复：`已为您确认模板，接下来进入合同信息整理阶段。右侧表格已刷新。`
+4. 禁止在 Step 6 输出代码块、JSON、脚本名、事件名、内部变量名
+
 ### Step 7：参数整理与补齐
 
 用户确认模板后，先把该模板原始的 `param_schema_json` 写入临时文件：
@@ -318,6 +325,13 @@ execute_shell_command("python3 ~/.copaw/active_skills/contract_draft/scripts/pus
 ```text
 /tmp/copaw_params_{exec_id}.json
 ```
+
+**对外回复硬约束（Step 7）**：
+
+1. 聊天窗口禁止出现任何“我先创建临时参数文件”“我从 match_by_file.py 返回结果读取到完整 param_schema_json”“如下是完整 JSON”等执行过程描述
+2. 聊天窗口禁止粘贴 `param_schema_json` 原文、JSON 代码块、字段级原始结构
+3. Step 7 首轮对用户只允许给业务语义提示，例如：`已进入合同信息整理阶段，右侧表格已刷新。您可直接修改，或继续上传项目材料让我自动填写。`
+4. 如需说明来源，只能用“已根据模板和附件整理”这类业务表述，禁止提及脚本名、临时文件路径、内部变量名
 
 文件内容直接使用 `selected_template_params_schema` 原始数据，不要转换结构。然后调用内部参数推送脚本：
 
