@@ -171,7 +171,7 @@ def push_end(
     skill_name: str,
     input_data: dict[str, Any],
     output_data: dict[str, Any],
-    render_type: str = "agent_end",
+    render_type: str = "end",
     exec_id: str = "",
     run_id: str = "",
     runtime_ms: int = 0,

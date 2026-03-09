@@ -14,7 +14,7 @@ sys.path.insert(0, str(_CUR_DIR))
 
 from event_meta import SKILL_LABEL, SKILL_NAME, get_event_name
 from push import push
-from redis_push import push_end, push_error, push_running, push_start
+from redis_push import push_error, push_running, push_start
 from runtime_context import resolve_session_id, resolve_user_id
 
 
@@ -207,32 +207,7 @@ def main():
         "draft_entry_reason": draft_entry_reason,
     }
 
-    push(session_id, user_id, f"✅ 合同文件已生成：{filename}", msg_type="result")
-    push_running(
-        session_id=session_id,
-        user_id=user_id,
-        skill_name=SKILL_NAME,
-        skill_label=SKILL_LABEL,
-        event_name=get_event_name("llm_draft_success"),
-        render_type="llm_draft_success",
-        input_data=_input,
-        output_data=result,
-        exec_id=exec_id,
-        run_id=run_id,
-    )
-    push_end(
-        session_id=session_id,
-        user_id=user_id,
-        skill_name=SKILL_NAME,
-        skill_label=SKILL_LABEL,
-        event_name=get_event_name("agent_end"),
-        input_data=_input,
-        output_data=result,
-        render_type="agent_end",
-        exec_id=exec_id,
-        run_id=run_id,
-    )
-
+    push(session_id, user_id, f"合同文件已生成，正在继续保存：{filename}", msg_type="progress")
     print(json.dumps(result, ensure_ascii=False))
 
 

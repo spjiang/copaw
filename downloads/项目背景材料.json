@@ -1,0 +1,82 @@
+{
+    "contract_effect_year": {
+        "desc": "合同生效年份",
+        "value": "2026"
+    },
+    "contract_effect_month": {
+        "desc": "合同生效月份",
+        "value": "3"
+    },
+    "contract_effect_day": {
+        "desc": "合同生效日期",
+        "value": "15"
+    },
+    "company_a": {
+        "desc": "甲方公司名称",
+        "value": "北京华夏科技有限公司"
+    },
+    "company_b": {
+        "desc": "乙方公司名称",
+        "value": "软通智慧信息技术有限公司"
+    },
+    "company_a_legal": {
+        "desc": "甲方法定代表人签字",
+        "value": "张三"
+    },
+    "company_b_legal": {
+        "desc": "乙方法定代表人签字",
+        "value": "李四"
+    },
+    "company_a_sign_date": {
+        "desc": "甲方签署日期",
+        "value": "2026年3月15日"
+    },
+    "company_b_sign_date": {
+        "desc": "乙方签署日期",
+        "value": "2026年3月15日"
+    },
+    "contract_amount": {
+        "desc": "合同金额（小写数字）",
+        "value": "500000"
+    },
+    "contract_amount_capital": {
+        "desc": "合同金额（大写汉字）",
+        "value": "伍拾万元整"
+    },
+    "tax_rate": {
+        "desc": "税率",
+        "value": "6%"
+    },
+    "party_a_legal_rep": {
+        "desc": "甲方法定代表人（或负责人）",
+        "value": "张三"
+    },
+    "party_b_legal_rep": {
+        "desc": "乙方法定代表人（或负责人）",
+        "value": "李四"
+    },
+    "party_a_year": {
+        "desc": "甲方签署年份",
+        "value": "2026"
+    },
+    "party_a_month": {
+        "desc": "甲方签署月份",
+        "value": "3"
+    },
+    "party_a_day": {
+        "desc": "甲方签署日期",
+        "value": "15"
+    },
+    "party_b_year": {
+        "desc": "乙方签署年份",
+        "value": "2026"
+    },
+    "party_b_month": {
+        "desc": "乙方签署月份",
+        "value": "3"
+    },
+    "party_b_day": {
+        "desc": "乙方签署日期",
+        "value": "15"
+    }
+}

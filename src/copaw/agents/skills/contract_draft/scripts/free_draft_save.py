@@ -139,6 +139,7 @@ def main() -> None:
         result = {
             "url": result_url,
             "result_url": result_url,
+            "render_result_url": result_url,
             "file_url": result_url,
             "filename": docx_file.name,
             "render_mode": "final",
@@ -149,28 +150,15 @@ def main() -> None:
             "source_api": FREE_DRAFT_SAVE_API,
         }
 
-        push_running(
-            session_id=session_id,
-            user_id=user_id,
-            skill_name=SKILL_NAME,
-            skill_label=SKILL_LABEL,
-            event_name=get_event_name("llm_draft_success"),
-            render_type="llm_draft_success",
-            input_data=input_data,
-            output_data=result,
-            exec_id=exec_id,
-            run_id=run_id,
-            runtime_ms=runtime_ms,
-        )
         push_end(
             session_id=session_id,
             user_id=user_id,
             skill_name=SKILL_NAME,
             skill_label=SKILL_LABEL,
-            event_name=get_event_name("agent_end"),
+            event_name=get_event_name("llm_draft_finished"),
             input_data=input_data,
             output_data=result,
-            render_type="agent_end",
+            render_type="llm_draft_finished",
             exec_id=exec_id,
             run_id=run_id,
             runtime_ms=runtime_ms,

@@ -35,7 +35,11 @@ def main():
     stage = sys.argv[2]
     exec_id = sys.argv[3]
     render_type = sys.argv[4] if len(sys.argv) > 4 else (
-        "agent_start" if stage == "start" else "agent_end" if stage == "end" else "error"
+        "agent_start"
+        if stage == "start"
+        else "end"
+        if stage == "end"
+        else "error"
     )
     message = sys.argv[5] if len(sys.argv) > 5 else ""
 
